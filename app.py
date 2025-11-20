@@ -1,5 +1,6 @@
 """
 Streamlitによる論文研究システムのUIアプリケーション
+Streamlit Cloud用（ルートディレクトリ配置版）
 """
 import streamlit as st
 import sys
@@ -11,8 +12,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from collections import Counter
 
-# パスを追加
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# パスを追加（ルートディレクトリから実行される場合）
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
 
 from database.database import DatabaseManager
 from crawler.scholar_crawler import ScholarCrawler
@@ -384,7 +386,7 @@ def show_settings_page():
         # .envファイルに保存する例
         if st.button("環境変数として保存"):
             env_path = os.path.join(
-                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                os.path.dirname(os.path.abspath(__file__)),
                 '.env'
             )
             with open(env_path, 'w') as f:
