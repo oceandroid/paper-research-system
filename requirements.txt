@@ -1,7 +1,17 @@
-streamlit==1.31.0
-google-generativeai==0.3.2
+# 論文クローリング
 scholarly==1.7.11
+
+# データベース
+sqlalchemy==2.0.25
+
+# LLM/NLP - Gemini API使用（無料）
+google-generativeai==0.3.2
+
+# 可視化
+streamlit==1.31.0
 wordcloud==1.9.3
 matplotlib==3.8.2
+
+# ユーティリティ
 pandas==2.1.4
 Pillow==10.2.0
