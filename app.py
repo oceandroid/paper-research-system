@@ -1,151 +1,287 @@
+"""
+Streamlitによる論文研究システムのUIアプリケーション
+"""
 import streamlit as st
-import google.generativeai as genai
-from scholarly import scholarly
+import sys
+import os
+import json
+from datetime import datetime, timedelta
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 import pandas as pd
-from datetime import datetime
-import re
-import time
+from collections import Counter
+
+# パスを追加
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from database.database import DatabaseManager
+from crawler.scholar_crawler import ScholarCrawler
+from crawler.pubmed_crawler import PubMedCrawler
+from analyzer.llm_analyzer import LLMAnalyzer
+
 
 # ページ設定
 st.set_page_config(
-    page_title="Mass Spectrometry 論文研究システム",
-    page_icon="🔬",
+    page_title="論文研究システム",
+    page_icon="📚",
     layout="wide"
 )
 
-# セッションステートの初期化
-if 'papers' not in st.session_state:
-    st.session_state.papers = []
-if 'summaries' not in st.session_state:
-    st.session_state.summaries = {}
 
-# タイトル
-st.title("🔬 Mass Spectrometry 論文研究システム")
-st.markdown("Google Scholarから論文を検索し、AIで日本語要約を生成します")
+@st.cache_resource
+def get_db():
+    """データベースマネージャーのシングルトン"""
+    return DatabaseManager("papers.db")
 
-# サイドバー: API設定
-st.sidebar.header("⚙️ 設定")
-gemini_api_key = st.sidebar.text_input(
-    "Google Gemini API Key",
-    type="password",
-    help="https://makersuite.google.com/app/apikey で取得できます（無料）"
-)
 
-if gemini_api_key:
-    genai.configure(api_key=gemini_api_key)
+@st.cache_resource
+def get_analyzer():
+    """LLM解析器のシングルトン"""
+    return LLMAnalyzer()
 
-# メインエリア
-tab1, tab2, tab3 = st.tabs(["📚 論文検索", "📊 ワードクラウド", "💾 保存データ"])
 
-# タブ1: 論文検索
-with tab1:
-    st.header("論文検索")
+def main():
+    st.title("📚 論文研究システム")
+    st.markdown("---")
 
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        query = st.text_input(
-            "検索キーワード",
-            placeholder="例: mass spectrometry proteomics",
-            help="Google Scholarで検索するキーワードを入力"
+    # サイドバー
+    with st.sidebar:
+        st.header("メニュー")
+        page = st.radio(
+            "ページ選択",
+            ["ホーム", "論文検索・クローリング", "データベース閲覧", "解析・可視化", "設定"]
         )
+
+    db = get_db()
+
+    # ページ表示
+    if page == "ホーム":
+        show_home(db)
+    elif page == "論文検索・クローリング":
+        show_crawling_page(db)
+    elif page == "データベース閲覧":
+        show_database_page(db)
+    elif page == "解析・可視化":
+        show_analysis_page(db)
+    elif page == "設定":
+        show_settings_page()
+
+
+def show_home(db):
+    """ホームページ"""
+    st.header("📊 ダッシュボード")
+
+    # 統計情報
+    papers = db.get_all_papers()
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("総論文数", len(papers))
+
     with col2:
-        max_results = st.number_input("取得件数", min_value=1, max_value=20, value=5)
+        recent_logs = db.get_recent_crawls(limit=1)
+        last_crawl = recent_logs[0].executed_at.strftime("%Y-%m-%d %H:%M") if recent_logs else "未実行"
+        st.metric("最終クローリング", last_crawl)
 
-    if st.button("🔍 検索開始", type="primary", disabled=not gemini_api_key):
-        if not query:
-            st.warning("検索キーワードを入力してください")
-        else:
-            with st.spinner("論文を検索中..."):
-                try:
-                    # Google Scholarから論文を取得
-                    search_query = scholarly.search_pubs(query)
-                    papers = []
+    with col3:
+        # 最新の論文
+        if papers:
+            latest_year = max([p.year for p in papers if p.year != 'N/A'])
+            st.metric("最新論文年", latest_year)
 
-                    progress_bar = st.progress(0)
-                    for i in range(max_results):
-                        try:
-                            paper = next(search_query)
-                            papers.append({
-                                'title': paper.get('bib', {}).get('title', 'タイトル不明'),
-                                'author': paper.get('bib', {}).get('author', ['著者不明'])[0] if paper.get('bib', {}).get('author') else '著者不明',
-                                'year': paper.get('bib', {}).get('pub_year', '年不明'),
-                                'abstract': paper.get('bib', {}).get('abstract', '要旨なし'),
-                                'url': paper.get('pub_url', ''),
-                                'cited_by': paper.get('num_citations', 0)
-                            })
-                            progress_bar.progress((i + 1) / max_results)
-                            time.sleep(1)  # Rate limit対策
-                        except StopIteration:
-                            break
-                        except Exception as e:
-                            st.warning(f"論文 {i+1} の取得に失敗: {str(e)}")
-                            continue
+    st.markdown("---")
 
-                    st.session_state.papers = papers
-                    st.success(f"✅ {len(papers)}件の論文を取得しました")
+    # 最近のクローリング履歴
+    st.subheader("🔄 最近のクローリング履歴")
+    logs = db.get_recent_crawls(limit=5)
 
-                except Exception as e:
-                    st.error(f"検索エラー: {str(e)}")
-                    st.info("💡 ヒント: 会社のプロキシでブロックされている可能性があります。別のネットワークで試してみてください。")
+    if logs:
+        log_data = []
+        for log in logs:
+            log_data.append({
+                "実行日時": log.executed_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "キーワード": log.keyword,
+                "取得数": log.papers_count,
+                "ステータス": log.status
+            })
+        st.dataframe(pd.DataFrame(log_data), use_container_width=True)
+    else:
+        st.info("クローリング履歴がありません")
 
-    # 検索結果表示
-    if st.session_state.papers:
-        st.subheader(f"検索結果 ({len(st.session_state.papers)}件)")
+    st.markdown("---")
 
-        for idx, paper in enumerate(st.session_state.papers):
-            with st.expander(f"📄 {paper['title'][:100]}..."):
-                st.markdown(f"**著者**: {paper['author']}")
-                st.markdown(f"**発表年**: {paper['year']} | **引用数**: {paper['cited_by']}")
-                st.markdown(f"**要旨**: {paper['abstract'][:300]}...")
+    # 最新論文
+    st.subheader("📄 最新の論文（5件）")
+    recent_papers = db.get_all_papers(limit=5)
 
-                if paper['url']:
-                    st.markdown(f"[🔗 論文リンク]({paper['url']})")
+    if recent_papers:
+        for paper in recent_papers:
+            with st.expander(f"**{paper.title}** ({paper.year})"):
+                st.write(f"**著者:** {paper.authors}")
+                st.write(f"**掲載:** {paper.venue}")
+                st.write(f"**引用数:** {paper.citations}")
+                st.write(f"**URL:** {paper.url}")
+                if paper.abstract != 'N/A':
+                    st.write(f"**概要:** {paper.abstract[:300]}...")
+    else:
+        st.info("まだ論文が登録されていません。「論文検索・クローリング」から論文を取得してください。")
 
-                # AI要約ボタン
-                if st.button(f"🤖 AI要約を生成", key=f"summarize_{idx}"):
-                    if not gemini_api_key:
-                        st.warning("Gemini API Keyを入力してください")
-                    else:
-                        with st.spinner("要約生成中..."):
-                            try:
-                                model = genai.GenerativeModel('gemini-pro')
-                                prompt = f"""
-以下の論文情報を日本語で簡潔に要約してください（300文字程度）。
-Mass Spectrometry分野の研究者向けに、重要なポイントを押さえてください。
 
-タイトル: {paper['title']}
-要旨: {paper['abstract']}
+def show_crawling_page(db):
+    """論文クローリングページ"""
+    st.header("🔍 論文検索・クローリング")
 
-要約:
-"""
-                                response = model.generate_content(prompt)
-                                summary = response.text
+    # データソース選択
+    data_source = st.radio(
+        "データソース",
+        ["PubMed（推奨・安定）", "Google Scholar"],
+        help="PubMedは公式APIで安定、Google Scholarはブロックされる可能性あり"
+    )
 
-                                st.session_state.summaries[paper['title']] = {
-                                    'summary': summary,
-                                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                }
-                                st.success("要約生成完了！")
-                                st.markdown(f"**📝 AI要約**:\n\n{summary}")
+    col1, col2 = st.columns(2)
 
-                            except Exception as e:
-                                st.error(f"要約生成エラー: {str(e)}")
+    with col1:
+        keyword = st.text_input("検索キーワード", value="mass spectrometry")
+        max_results = st.slider("取得件数", min_value=5, max_value=50, value=10)
 
-# タブ2: ワードクラウド
-with tab2:
-    st.header("ワードクラウド生成")
+    with col2:
+        year_from = st.number_input("検索開始年", min_value=2000, max_value=2030, value=2024)
+        search_mode = st.selectbox("検索モード", ["通常検索", "最近の論文（直近7日）"])
 
-    if st.session_state.papers:
-        if st.button("☁️ ワードクラウドを生成"):
-            with st.spinner("生成中..."):
-                # 全論文のタイトルと要旨を結合
-                text = " ".join([
-                    f"{p['title']} {p['abstract']}"
-                    for p in st.session_state.papers
-                ])
+    if st.button("🚀 検索開始", type="primary"):
+        with st.spinner("論文を検索中..."):
+            try:
+                # データソースに応じてクローラーを選択
+                if data_source == "PubMed（推奨・安定）":
+                    crawler = PubMedCrawler(email="user@example.com")
+                else:
+                    crawler = ScholarCrawler()
 
+                if search_mode == "通常検索":
+                    papers = crawler.search_papers(keyword, max_results, year_from)
+                else:
+                    papers = crawler.get_recent_papers(keyword, days=7, max_results=max_results)
+
+                if papers:
+                    st.success(f"✅ {len(papers)}件の論文を取得しました（ソース: {data_source}）")
+
+                    # データベースに保存
+                    saved_count = db.save_papers(papers)
+                    db.log_crawl(keyword, saved_count, "success")
+
+                    st.info(f"💾 {saved_count}件の新規論文をデータベースに保存しました")
+
+                    # 結果を表示
+                    for i, paper in enumerate(papers[:5], 1):
+                        with st.expander(f"{i}. {paper['title'][:80]}..."):
+                            st.write(f"**著者:** {', '.join(paper['authors'][:3]) if isinstance(paper['authors'], list) else paper['authors']}")
+                            st.write(f"**年:** {paper['year']}")
+                            st.write(f"**引用数:** {paper['citations']}")
+                            st.write(f"**ジャーナル:** {paper.get('venue', 'N/A')}")
+                            st.write(f"**URL:** [{paper['url']}]({paper['url']})")
+                            if paper.get('abstract') and paper['abstract'] != 'N/A':
+                                st.write(f"**要旨:** {paper['abstract'][:300]}...")
+                else:
+                    st.warning("論文が見つかりませんでした")
+                    db.log_crawl(keyword, 0, "failed", "No papers found")
+
+            except Exception as e:
+                st.error(f"❌ エラーが発生しました: {e}")
+                st.info("💡 Google Scholarでエラーが出た場合は、PubMedをお試しください")
+                db.log_crawl(keyword, 0, "failed", str(e))
+
+
+def show_database_page(db):
+    """データベース閲覧ページ"""
+    st.header("💾 データベース閲覧")
+
+    # 検索フィルター
+    col1, col2 = st.columns(2)
+    with col1:
+        keyword_filter = st.text_input("キーワードでフィルター", "")
+    with col2:
+        limit = st.number_input("表示件数", min_value=10, max_value=100, value=20)
+
+    # 論文取得
+    if keyword_filter:
+        papers = db.get_papers_by_keyword(keyword_filter)
+    else:
+        papers = db.get_all_papers(limit=limit)
+
+    st.write(f"**表示件数:** {len(papers)}件")
+
+    if papers:
+        for paper in papers:
+            with st.expander(f"**{paper.title}** ({paper.year})"):
+                col1, col2 = st.columns([3, 1])
+
+                with col1:
+                    authors_list = json.loads(paper.authors) if paper.authors.startswith('[') else paper.authors
+                    authors_str = ', '.join(authors_list) if isinstance(authors_list, list) else authors_list
+
+                    st.write(f"**著者:** {authors_str}")
+                    st.write(f"**掲載:** {paper.venue}")
+                    st.write(f"**URL:** {paper.url}")
+                    if paper.abstract != 'N/A':
+                        st.write(f"**概要:** {paper.abstract}")
+
+                with col2:
+                    st.metric("引用数", paper.citations)
+                    st.write(f"登録日: {paper.created_at.strftime('%Y-%m-%d')}")
+
+                # 解析ボタン
+                if st.button(f"この論文を解析", key=f"analyze_{paper.id}"):
+                    analyze_single_paper(db, paper)
+    else:
+        st.info("論文がありません")
+
+
+def analyze_single_paper(db, paper):
+    """単一の論文を解析"""
+    analyzer = get_analyzer()
+
+    with st.spinner("論文を解析中..."):
+        # 著者情報を整形
+        authors_list = json.loads(paper.authors) if paper.authors.startswith('[') else paper.authors
+        authors_str = ', '.join(authors_list) if isinstance(authors_list, list) else authors_list
+
+        analysis = analyzer.analyze_paper(
+            title=paper.title,
+            abstract=paper.abstract,
+            authors=authors_str,
+            year=paper.year
+        )
+
+        # データベースに保存
+        db.save_analysis(paper.id, analysis)
+
+        st.success("解析完了！")
+        st.json(analysis)
+
+
+def show_analysis_page(db):
+    """解析・可視化ページ"""
+    st.header("📊 解析・可視化")
+
+    papers = db.get_all_papers()
+
+    if not papers:
+        st.warning("論文がありません。まず論文をクローリングしてください。")
+        return
+
+    tab1, tab2, tab3 = st.tabs(["ワードクラウド", "統計分析", "一括解析"])
+
+    with tab1:
+        st.subheader("☁️ ワードクラウド")
+
+        # アブストラクトからテキストを抽出
+        all_text = " ".join([
+            paper.abstract for paper in papers
+            if paper.abstract and paper.abstract != 'N/A'
+        ])
+
+        if all_text:
+            try:
                 # ワードクラウド生成
                 wordcloud = WordCloud(
                     width=800,
@@ -153,7 +289,7 @@ with tab2:
                     background_color='white',
                     colormap='viridis',
                     max_words=100
-                ).generate(text)
+                ).generate(all_text)
 
                 # 表示
                 fig, ax = plt.subplots(figsize=(12, 6))
@@ -161,47 +297,104 @@ with tab2:
                 ax.axis('off')
                 st.pyplot(fig)
 
-                st.success("✅ ワードクラウド生成完了")
-    else:
-        st.info("まず「論文検索」タブで論文を取得してください")
+            except Exception as e:
+                st.error(f"ワードクラウド生成エラー: {e}")
+        else:
+            st.info("アブストラクトデータが不足しています")
 
-# タブ3: 保存データ
-with tab3:
-    st.header("保存されたデータ")
+    with tab2:
+        st.subheader("📈 統計分析")
 
-    if st.session_state.papers:
-        # 論文リスト
-        st.subheader("📚 取得済み論文")
-        df = pd.DataFrame(st.session_state.papers)
-        st.dataframe(df[['title', 'author', 'year', 'cited_by']], use_container_width=True)
+        # 年別論文数
+        years = [p.year for p in papers if p.year != 'N/A']
+        year_counts = Counter(years)
 
-        # CSV ダウンロード
-        csv = df.to_csv(index=False, encoding='utf-8-sig')
-        st.download_button(
-            label="📥 CSVダウンロード",
-            data=csv,
-            file_name=f"papers_{datetime.now().strftime('%Y%m%d')}.csv",
-            mime="text/csv"
-        )
+        if year_counts:
+            st.write("**年別論文数**")
+            year_df = pd.DataFrame(
+                list(year_counts.items()),
+                columns=['年', '論文数']
+            ).sort_values('年')
+            st.bar_chart(year_df.set_index('年'))
 
-    if st.session_state.summaries:
-        st.subheader("📝 生成済みAI要約")
-        for title, data in st.session_state.summaries.items():
-            with st.expander(f"{title[:80]}..."):
-                st.markdown(f"**生成日時**: {data['timestamp']}")
-                st.markdown(data['summary'])
+        # 引用数上位
+        st.write("**引用数トップ10**")
+        papers_sorted = sorted(papers, key=lambda x: x.citations, reverse=True)[:10]
+        citation_data = [{
+            'タイトル': p.title[:50] + '...' if len(p.title) > 50 else p.title,
+            '引用数': p.citations,
+            '年': p.year
+        } for p in papers_sorted]
+        st.dataframe(pd.DataFrame(citation_data), use_container_width=True)
 
-    if not st.session_state.papers and not st.session_state.summaries:
-        st.info("まだデータがありません。「論文検索」タブから始めてください。")
+    with tab3:
+        st.subheader("🔬 一括解析")
+        st.write("データベース内の論文をLLMで一括解析します")
 
-# フッター
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📖 使い方")
-st.sidebar.markdown("""
-1. [Google AI Studio](https://makersuite.google.com/app/apikey)でAPI Keyを取得（無料）
-2. 左のテキストボックスにAPI Keyを入力
-3. 検索キーワードを入力して検索
-4. 論文をクリックして要約生成
-""")
-st.sidebar.markdown("---")
-st.sidebar.info("💡 セッション中のみデータを保持します。ブラウザを閉じるとリセットされます。")
+        limit = st.slider("解析する論文数", min_value=1, max_value=20, value=5)
+
+        if st.button("一括解析を開始", type="primary"):
+            analyzer = get_analyzer()
+            papers_to_analyze = db.get_all_papers(limit=limit)
+
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+
+            for i, paper in enumerate(papers_to_analyze):
+                status_text.text(f"解析中 ({i+1}/{len(papers_to_analyze)}): {paper.title[:50]}...")
+
+                # 既に解析済みかチェック
+                existing_analysis = db.get_analysis_by_paper_id(paper.id)
+                if existing_analysis:
+                    continue
+
+                # 著者情報を整形
+                authors_list = json.loads(paper.authors) if paper.authors.startswith('[') else paper.authors
+                authors_str = ', '.join(authors_list) if isinstance(authors_list, list) else authors_list
+
+                # 解析実行
+                analysis = analyzer.analyze_paper(
+                    title=paper.title,
+                    abstract=paper.abstract,
+                    authors=authors_str,
+                    year=paper.year
+                )
+
+                # 保存
+                db.save_analysis(paper.id, analysis)
+
+                progress_bar.progress((i + 1) / len(papers_to_analyze))
+
+            status_text.text("解析完了！")
+            st.success(f"{len(papers_to_analyze)}件の論文の解析が完了しました")
+
+
+def show_settings_page():
+    """設定ページ"""
+    st.header("⚙️ 設定")
+
+    st.subheader("API設定")
+    st.write("環境変数 `OPENAI_API_KEY` を設定してください")
+
+    api_key = st.text_input("OpenAI APIキー", type="password", placeholder="sk-...")
+
+    if api_key:
+        st.success("APIキーが入力されました（.envファイルに保存してください）")
+
+        # .envファイルに保存する例
+        if st.button("環境変数として保存"):
+            env_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                '.env'
+            )
+            with open(env_path, 'w') as f:
+                f.write(f"OPENAI_API_KEY={api_key}\n")
+            st.success(f".envファイルに保存しました: {env_path}")
+
+    st.markdown("---")
+    st.subheader("スケジューラー設定")
+    st.write("定期実行の設定は `scheduler/scheduler.py` を編集してください")
+
+
+if __name__ == "__main__":
+    main()
