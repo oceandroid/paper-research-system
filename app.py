@@ -1,7 +1,8 @@
 """
-Mass Spectrometry 論文研究システム（機能拡張版）
-- PubMed & Google Scholar 対応
-- ワードクラウド & 共起ネットワーク解析
+Mass Spectrometry 論文研究システム（高度分析版）
+- 研究トレンドタイムライン
+- AI一括要約（Gemini API）
+- 引用ランキング
 """
 import streamlit as st
 import sys
@@ -18,10 +19,11 @@ from xml.etree import ElementTree as ET
 import re
 from itertools import combinations
 import networkx as nx
+import json
 
 # ページ設定
 st.set_page_config(
-    page_title="Mass Spectrometry 論文研究システム",
+    page_title="論文検索システム",
     page_icon="🔬",
     layout="wide"
 )
@@ -31,6 +33,8 @@ if 'papers' not in st.session_state:
     st.session_state.papers = []
 if 'summaries' not in st.session_state:
     st.session_state.summaries = {}
+if 'gemini_api_key' not in st.session_state:
+    st.session_state.gemini_api_key = ""
 
 
 # ==================== PubMed Crawler ====================
@@ -199,26 +203,95 @@ class PubMedCrawler:
             return papers
 
 
+# ==================== Semantic Scholar Crawler ====================
+class SemanticScholarCrawler:
+    """Semantic Scholar APIから論文情報を取得"""
+
+    def __init__(self):
+        self.base_url = "https://api.semanticscholar.org/graph/v1"
+
+    def search_papers(
+        self,
+        keyword: str,
+        max_results: int = 20,
+        year_from: Optional[int] = None
+    ) -> List[Dict]:
+        papers = []
+        try:
+            search_url = f"{self.base_url}/paper/search"
+            
+            params = {
+                'query': keyword,
+                'limit': min(max_results, 100),
+                'fields': 'title,authors,year,abstract,venue,citationCount,externalIds,url,publicationDate'
+            }
+
+            if year_from:
+                params['year'] = f"{year_from}-"
+
+            response = requests.get(search_url, params=params, timeout=15)
+            response.raise_for_status()
+            data = response.json()
+
+            for paper_data in data.get('data', []):
+                try:
+                    authors = [author['name'] for author in paper_data.get('authors', [])]
+                    year = paper_data.get('year', 'N/A')
+                    
+                    external_ids = paper_data.get('externalIds', {})
+                    paper_id = paper_data.get('paperId', '')
+                    url = f"https://www.semanticscholar.org/paper/{paper_id}"
+                    
+                    if external_ids.get('DOI'):
+                        url = f"https://doi.org/{external_ids['DOI']}"
+
+                    paper_info = {
+                        'title': paper_data.get('title', 'N/A'),
+                        'authors': authors,
+                        'year': str(year) if year else 'N/A',
+                        'abstract': paper_data.get('abstract', 'N/A'),
+                        'venue': paper_data.get('venue', 'N/A'),
+                        'url': url,
+                        'citations': paper_data.get('citationCount', 0),
+                        'crawled_at': datetime.now().isoformat(),
+                        'keyword': keyword,
+                        'source': 'Semantic Scholar'
+                    }
+
+                    papers.append(paper_info)
+
+                except Exception as e:
+                    continue
+
+            return papers
+
+        except Exception as e:
+            st.error(f"Semantic Scholar API エラー: {e}")
+            return papers
+
+    def get_recent_papers(self, keyword: str, days: int = 7, max_results: int = 20) -> List[Dict]:
+        current_year = datetime.now().year
+        return self.search_papers(keyword, max_results, year_from=current_year)
+
+
 # ==================== Google Scholar Crawler ====================
 class ScholarCrawler:
-    """Google Scholarから論文情報を取得（scholarly使用）"""
+    """Google Scholarから論文情報を取得"""
 
     def __init__(self):
         self.results = []
-        # scholarly のインポートを遅延実行
         try:
             from scholarly import scholarly, ProxyGenerator
             self.scholarly = scholarly
             
-            # プロキシ設定（ブロック対策）
             try:
                 pg = ProxyGenerator()
                 pg.FreeProxies()
                 scholarly.use_proxy(pg)
             except:
-                pass  # プロキシ設定失敗してもスキップ
+                pass
         except ImportError:
-            st.error("scholarly ライブラリがインストールされていません")
+            st.warning("scholarly ライブラリがインストールされていません")
             self.scholarly = None
 
     def search_papers(
@@ -228,6 +301,7 @@ class ScholarCrawler:
         year_from: Optional[int] = None
     ) -> List[Dict]:
         if not self.scholarly:
+            st.error("Google Scholar機能は利用できません")
             return []
 
         papers = []
@@ -259,7 +333,7 @@ class ScholarCrawler:
 
                     papers.append(paper_info)
                     count += 1
-                    time.sleep(2)  # Rate limit対策
+                    time.sleep(2)
 
                 except Exception as e:
                     continue
@@ -268,7 +342,7 @@ class ScholarCrawler:
 
         except Exception as e:
             st.error(f"Google Scholar エラー: {e}")
-            st.info("💡 Google Scholarがブロックされた可能性があります。PubMedをお試しください。")
+            st.info("💡 Google Scholarがブロックされました。Semantic ScholarまたはPubMedをお試しください。")
             return papers
 
     def get_recent_papers(self, keyword: str, days: int = 7, max_results: int = 20) -> List[Dict]:
@@ -278,13 +352,55 @@ class ScholarCrawler:
         return self.search_papers(keyword, max_results, year_from)
 
 
+# ==================== AI要約（Gemini API） ====================
+def summarize_papers_with_gemini(papers: List[Dict], api_key: str, language: str = "japanese") -> Dict[str, str]:
+    """Gemini APIで論文を一括要約"""
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-pro')
+        
+        summaries = {}
+        
+        for i, paper in enumerate(papers):
+            try:
+                if paper['abstract'] == 'N/A':
+                    continue
+                
+                prompt = f"""
+以下の論文を日本語で簡潔に要約してください（200文字程度）。
+Mass Spectrometry分野の研究者向けに、重要なポイントを押さえてください。
+
+タイトル: {paper['title']}
+著者: {', '.join(paper['authors'][:3]) if isinstance(paper['authors'], list) else paper['authors']}
+年: {paper['year']}
+要旨: {paper['abstract'][:1000]}
+
+要約:
+"""
+                
+                response = model.generate_content(prompt)
+                summary = response.text
+                summaries[paper['title']] = summary
+                
+                time.sleep(1)  # API制限対策
+                
+            except Exception as e:
+                summaries[paper['title']] = f"要約エラー: {str(e)}"
+                continue
+        
+        return summaries
+    
+    except Exception as e:
+        st.error(f"Gemini API エラー: {e}")
+        return {}
+
+
 # ==================== テキスト解析ユーティリティ ====================
 def extract_keywords(text: str, min_length: int = 4, top_n: int = 50) -> List[str]:
     """テキストからキーワードを抽出"""
-    # 英単語のみ抽出（小文字化）
     words = re.findall(r'\b[a-zA-Z]{' + str(min_length) + r',}\b', text.lower())
     
-    # ストップワードを除外
     stop_words = {
         'this', 'that', 'with', 'from', 'were', 'been', 'have', 'has', 'had',
         'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can',
@@ -295,32 +411,25 @@ def extract_keywords(text: str, min_length: int = 4, top_n: int = 50) -> List[st
     }
     
     filtered_words = [w for w in words if w not in stop_words]
-    
-    # 頻度カウント
     word_counts = Counter(filtered_words)
     return [word for word, _ in word_counts.most_common(top_n)]
 
 
 def build_cooccurrence_network(papers: List[Dict], top_keywords: int = 30, window_size: int = 10):
     """共起ネットワークを構築"""
-    # 全テキストを結合
     all_text = " ".join([
         f"{p['title']} {p['abstract']}"
         for p in papers
         if p['abstract'] != 'N/A'
     ])
     
-    # キーワード抽出
     keywords = extract_keywords(all_text, min_length=5, top_n=top_keywords)
-    
-    # 共起行列を作成
     cooccurrence = Counter()
     
     for paper in papers:
         text = f"{paper['title']} {paper['abstract']}"
         words = re.findall(r'\b[a-zA-Z]{5,}\b', text.lower())
         
-        # ウィンドウ内での共起をカウント
         for i, word1 in enumerate(words):
             if word1 not in keywords:
                 continue
@@ -337,36 +446,54 @@ def build_cooccurrence_network(papers: List[Dict], top_keywords: int = 30, windo
 # ==================== メインアプリ ====================
 def main():
     st.title("🔬 Mass Spectrometry 論文研究システム")
-    st.markdown("PubMed・Google Scholarから論文を検索し、高度な解析が可能なシステム")
+    st.markdown("高度な論文分析・トレンド解析・AI要約システム")
     st.markdown("---")
 
+    # サイドバー: API Key設定
+    with st.sidebar:
+        st.header("⚙️ 設定")
+        gemini_key = st.text_input(
+            "Google Gemini API Key",
+            type="password",
+            value=st.session_state.gemini_api_key,
+            help="https://makersuite.google.com/app/apikey で取得（無料）"
+        )
+        if gemini_key:
+            st.session_state.gemini_api_key = gemini_key
+            st.success("APIキー設定済み")
+
     # タブ
-    tab1, tab2, tab3, tab4 = st.tabs(["📚 論文検索", "📊 ワードクラウド", "🕸️ 共起ネットワーク", "💾 保存データ"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "📚 論文検索",
+        "📈 研究トレンド",
+        "🤖 AI一括要約",
+        "📊 ワードクラウド",
+        "🕸️ 共起ネットワーク",
+        "💾 保存データ"
+    ])
 
     # タブ1: 論文検索
     with tab1:
         st.header("論文検索")
 
-        # データソース選択
         data_source = st.radio(
             "データソース",
-            ["PubMed（推奨・安定）", "Google Scholar"],
-            help="PubMedは公式APIで安定。Google Scholarは引用数も取得できるがブロックされる可能性あり"
+            ["PubMed（医学・生命科学）", "Semantic Scholar（全分野・引用数あり）", "Google Scholar（ブロック注意）"],
+            help="Semantic Scholarが最もバランスが良くおすすめです"
         )
 
         col1, col2 = st.columns([3, 1])
         with col1:
             query = st.text_input(
                 "検索キーワード",
-                placeholder="例: mass spectrometry proteomics",
-                help="検索するキーワードを入力"
+                placeholder="例: mass spectrometry proteomics"
             )
         with col2:
             max_results = st.number_input("取得件数", min_value=1, max_value=50, value=10)
 
         col3, col4 = st.columns(2)
         with col3:
-            year_from = st.number_input("検索開始年", min_value=2000, max_value=2030, value=2020)
+            year_from = st.number_input("検索開始年", min_value=2000, max_value=2030, value=2015)
         with col4:
             search_mode = st.selectbox("検索モード", ["通常検索", "最近の論文（直近7日）"])
 
@@ -376,9 +503,10 @@ def main():
             else:
                 with st.spinner(f"{data_source}で論文を検索中..."):
                     try:
-                        # データソースに応じてクローラーを選択
-                        if data_source == "PubMed（推奨・安定）":
+                        if "PubMed" in data_source:
                             crawler = PubMedCrawler()
+                        elif "Semantic Scholar" in data_source:
+                            crawler = SemanticScholarCrawler()
                         else:
                             crawler = ScholarCrawler()
 
@@ -391,7 +519,6 @@ def main():
                             st.session_state.papers = papers
                             st.success(f"✅ {len(papers)}件の論文を取得しました（ソース: {data_source}）")
 
-                            # 結果を表示
                             for i, paper in enumerate(papers[:10], 1):
                                 with st.expander(f"📄 {i}. {paper['title'][:80]}..."):
                                     authors_list = paper['authors']
@@ -414,11 +541,149 @@ def main():
 
                     except Exception as e:
                         st.error(f"エラーが発生しました: {e}")
-                        if data_source == "Google Scholar":
-                            st.info("💡 Google Scholarでエラーが出た場合は、PubMedをお試しください")
 
-    # タブ2: ワードクラウド
+    # タブ2: 研究トレンドタイムライン
     with tab2:
+        st.header("📈 研究トレンド分析")
+        st.markdown("論文の時系列変化とキーワードトレンドを可視化")
+
+        if st.session_state.papers:
+            st.subheader("📅 年次論文数推移")
+            
+            years = [p['year'] for p in st.session_state.papers if p['year'] != 'N/A' and p['year'].isdigit()]
+            
+            if years:
+                year_counts = Counter(years)
+                year_df = pd.DataFrame(
+                    list(year_counts.items()),
+                    columns=['年', '論文数']
+                ).sort_values('年')
+                
+                # 折れ線グラフ
+                fig, ax = plt.subplots(figsize=(12, 6))
+                ax.plot(year_df['年'], year_df['論文数'], marker='o', linewidth=2, markersize=8)
+                ax.set_xlabel('年', fontsize=12)
+                ax.set_ylabel('論文数', fontsize=12)
+                ax.set_title('年次論文数推移', fontsize=14, fontweight='bold')
+                ax.grid(True, alpha=0.3)
+                st.pyplot(fig)
+                
+                # 統計情報
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("総論文数", len(years))
+                with col2:
+                    peak_year = year_counts.most_common(1)[0][0]
+                    st.metric("ピーク年", peak_year)
+                with col3:
+                    avg_per_year = len(years) / len(year_counts) if year_counts else 0
+                    st.metric("年平均", f"{avg_per_year:.1f}件")
+                
+                # トレンド判定
+                st.subheader("📊 トレンド分析")
+                sorted_years = sorted(year_counts.items())
+                if len(sorted_years) >= 3:
+                    recent_3years = sum([count for year, count in sorted_years[-3:]])
+                    older_3years = sum([count for year, count in sorted_years[:3]])
+                    
+                    if recent_3years > older_3years * 1.5:
+                        st.success("🔥 **上昇トレンド**: 近年の研究が活発化しています")
+                    elif recent_3years < older_3years * 0.7:
+                        st.warning("📉 **減少トレンド**: 研究活動が減少傾向です")
+                    else:
+                        st.info("➡️ **安定トレンド**: 研究活動は安定しています")
+                
+                # キーワードの時系列変化
+                st.subheader("🔑 キーワード出現トレンド")
+                
+                all_text = " ".join([
+                    f"{p['title']} {p['abstract']}"
+                    for p in st.session_state.papers
+                    if p['abstract'] != 'N/A'
+                ])
+                
+                top_keywords = extract_keywords(all_text, min_length=5, top_n=10)
+                
+                if top_keywords:
+                    keyword_trends = {}
+                    
+                    for kw in top_keywords[:5]:  # 上位5キーワードのみ
+                        yearly_count = {}
+                        for paper in st.session_state.papers:
+                            if paper['year'] != 'N/A' and paper['year'].isdigit():
+                                text = f"{paper['title']} {paper['abstract']}".lower()
+                                if kw in text:
+                                    yearly_count[paper['year']] = yearly_count.get(paper['year'], 0) + 1
+                        
+                        keyword_trends[kw] = yearly_count
+                    
+                    # キーワード別折れ線グラフ
+                    fig, ax = plt.subplots(figsize=(12, 6))
+                    
+                    for kw, trend in keyword_trends.items():
+                        sorted_trend = sorted(trend.items())
+                        years_list = [year for year, _ in sorted_trend]
+                        counts_list = [count for _, count in sorted_trend]
+                        ax.plot(years_list, counts_list, marker='o', label=kw, linewidth=2)
+                    
+                    ax.set_xlabel('年', fontsize=12)
+                    ax.set_ylabel('出現回数', fontsize=12)
+                    ax.set_title('キーワード出現トレンド（上位5件）', fontsize=14, fontweight='bold')
+                    ax.legend()
+                    ax.grid(True, alpha=0.3)
+                    st.pyplot(fig)
+                
+            else:
+                st.warning("年データが不足しています")
+        else:
+            st.info("まず「論文検索」タブで論文を取得してください")
+
+    # タブ3: AI一括要約
+    with tab3:
+        st.header("🤖 AI一括要約（Gemini API）")
+        st.markdown("取得した論文をAIが自動で要約します")
+
+        if st.session_state.papers:
+            if not st.session_state.gemini_api_key:
+                st.warning("⚠️ サイドバーでGemini API Keyを設定してください")
+                st.markdown("[Google AI Studio](https://makersuite.google.com/app/apikey)で無料で取得できます")
+            else:
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.info(f"現在 {len(st.session_state.papers)} 件の論文があります")
+                with col2:
+                    max_summarize = st.number_input("要約する件数", 1, min(20, len(st.session_state.papers)), 5)
+                
+                if st.button("🤖 AI要約を開始", type="primary"):
+                    papers_to_summarize = st.session_state.papers[:max_summarize]
+                    
+                    with st.spinner(f"{len(papers_to_summarize)}件の論文を要約中..."):
+                        summaries = summarize_papers_with_gemini(
+                            papers_to_summarize,
+                            st.session_state.gemini_api_key
+                        )
+                        
+                        if summaries:
+                            st.session_state.summaries = summaries
+                            st.success(f"✅ {len(summaries)}件の論文を要約しました")
+                            
+                            # 要約結果を表示
+                            for i, (title, summary) in enumerate(summaries.items(), 1):
+                                with st.expander(f"📝 {i}. {title[:70]}..."):
+                                    st.markdown(f"**要約**:")
+                                    st.markdown(summary)
+                                    
+                                    # 元論文の情報も表示
+                                    original_paper = next((p for p in papers_to_summarize if p['title'] == title), None)
+                                    if original_paper:
+                                        st.markdown(f"**URL**: [{original_paper['url']}]({original_paper['url']})")
+                        else:
+                            st.error("要約に失敗しました")
+        else:
+            st.info("まず「論文検索」タブで論文を取得してください")
+
+    # タブ4: ワードクラウド
+    with tab4:
         st.header("☁️ ワードクラウド生成")
 
         if st.session_state.papers:
@@ -455,10 +720,9 @@ def main():
         else:
             st.info("まず「論文検索」タブで論文を取得してください")
 
-    # タブ3: 共起ネットワーク
-    with tab3:
+    # タブ5: 共起ネットワーク
+    with tab5:
         st.header("🕸️ 共起ネットワーク解析")
-        st.markdown("キーワード間の関係性を可視化します")
 
         if st.session_state.papers:
             col1, col2, col3 = st.columns(3)
@@ -477,7 +741,6 @@ def main():
                         window_size=window_size
                     )
 
-                    # ネットワークグラフを構築
                     G = nx.Graph()
                     
                     for (word1, word2), count in cooccurrence.items():
@@ -485,13 +748,9 @@ def main():
                             G.add_edge(word1, word2, weight=count)
 
                     if len(G.nodes()) > 0:
-                        # レイアウト計算
                         pos = nx.spring_layout(G, k=0.5, iterations=50)
-
-                        # 描画
                         fig, ax = plt.subplots(figsize=(16, 12))
                         
-                        # ノード描画
                         node_sizes = [G.degree(node) * 300 for node in G.nodes()]
                         nx.draw_networkx_nodes(
                             G, pos,
@@ -501,7 +760,6 @@ def main():
                             ax=ax
                         )
 
-                        # エッジ描画
                         edges = G.edges()
                         weights = [G[u][v]['weight'] for u, v in edges]
                         max_weight = max(weights) if weights else 1
@@ -513,7 +771,6 @@ def main():
                             ax=ax
                         )
 
-                        # ラベル描画
                         nx.draw_networkx_labels(
                             G, pos,
                             font_size=10,
@@ -529,39 +786,51 @@ def main():
                         
                         st.pyplot(fig)
                         
-                        # 統計情報
                         st.subheader("📊 ネットワーク統計")
                         col1, col2, col3 = st.columns(3)
                         with col1:
-                            st.metric("ノード数（キーワード）", len(G.nodes()))
+                            st.metric("ノード数", len(G.nodes()))
                         with col2:
-                            st.metric("エッジ数（共起関係）", len(G.edges()))
+                            st.metric("エッジ数", len(G.edges()))
                         with col3:
                             if len(G.nodes()) > 0:
                                 avg_degree = sum(dict(G.degree()).values()) / len(G.nodes())
                                 st.metric("平均次数", f"{avg_degree:.2f}")
 
-                        # 中心性の高いキーワード
-                        st.subheader("🎯 重要キーワード（中心性順）")
-                        if len(G.nodes()) > 0:
-                            degree_centrality = nx.degree_centrality(G)
-                            top_central = sorted(degree_centrality.items(), key=lambda x: x[1], reverse=True)[:10]
-                            
-                            df_central = pd.DataFrame(top_central, columns=['キーワード', '中心性'])
-                            st.dataframe(df_central, use_container_width=True)
-
                         st.success("✅ 共起ネットワーク生成完了")
                     else:
-                        st.warning("共起関係が見つかりませんでした。最小共起回数を下げてみてください。")
+                        st.warning("共起関係が見つかりませんでした")
 
         else:
             st.info("まず「論文検索」タブで論文を取得してください")
 
-    # タブ4: 保存データ
-    with tab4:
+    # タブ6: 保存データ
+    with tab6:
         st.header("💾 保存されたデータ")
 
         if st.session_state.papers:
+            # 引用ランキング
+            st.subheader("🏆 引用数ランキング（Top 10）")
+            
+            papers_with_citations = [p for p in st.session_state.papers if p.get('citations', 0) > 0]
+            
+            if papers_with_citations:
+                sorted_papers = sorted(papers_with_citations, key=lambda x: x.get('citations', 0), reverse=True)[:10]
+                
+                for i, paper in enumerate(sorted_papers, 1):
+                    col1, col2 = st.columns([5, 1])
+                    with col1:
+                        st.markdown(f"**{i}. {paper['title'][:70]}...**")
+                        authors_str = ', '.join(paper['authors'][:2]) if isinstance(paper['authors'], list) else paper['authors']
+                        st.caption(f"{authors_str} ({paper['year']})")
+                    with col2:
+                        st.metric("引用数", paper['citations'])
+            else:
+                st.info("引用数データがありません（PubMedは引用数なし）")
+            
+            st.markdown("---")
+            
+            # 論文リスト
             st.subheader("📚 取得済み論文")
             
             df_data = []
@@ -616,38 +885,8 @@ def main():
                 total_citations = sum([p.get('citations', 0) for p in st.session_state.papers])
                 st.metric("総引用数", total_citations)
 
-            # データソース別集計
-            st.subheader("📈 データソース別")
-            sources = [p.get('source', 'Unknown') for p in st.session_state.papers]
-            source_counts = Counter(sources)
-            
-            df_sources = pd.DataFrame(source_counts.items(), columns=['ソース', '論文数'])
-            st.bar_chart(df_sources.set_index('ソース'))
-
         else:
-            st.info("まだデータがありません。「論文検索」タブから始めてください。")
-
-    # サイドバー
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📖 使い方")
-    st.sidebar.markdown("""
-    **1. 論文検索**
-    - PubMed/Google Scholarを選択
-    - キーワードを入力して検索
-    
-    **2. ワードクラウド**
-    - 頻出単語を視覚化
-    
-    **3. 共起ネットワーク**
-    - キーワード間の関係性を解析
-    - ノードサイズ = 重要度
-    - エッジの太さ = 共起頻度
-    
-    **4. データ保存**
-    - CSV形式でダウンロード可能
-    """)
-    st.sidebar.markdown("---")
-    st.sidebar.info("💡 セッション中のみデータを保持します")
+            st.info("まだデータがありません")
 
 
 if __name__ == "__main__":
