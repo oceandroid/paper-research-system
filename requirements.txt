@@ -2,6 +2,9 @@
 scholarly==1.7.11
 requests==2.31.0
 
+# LLM/NLP
+google-generativeai==0.3.2
+
 # データ解析・可視化
 streamlit==1.31.0
 pandas==2.1.4
