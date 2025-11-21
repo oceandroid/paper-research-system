@@ -536,19 +536,23 @@ def main():
 
         st.markdown("### 📊 データソース比較")
         st.markdown("""
-        **PubMed**
+        **PubMed** 📚
         - 医学・生命科学特化
         - 公式API・安定
         - 引用数なし
+        - 推奨取得数: 20-200件
 
         **Semantic Scholar** ⭐
         - 全分野対応
         - 引用数あり
         - 無料・安定
+        - 推奨取得数: 20-100件
 
-        **Google Scholar**
+        **Google Scholar** ⚠️
         - 最大のDB
         - ブロックされやすい
+        - 推奨取得数: 10-30件
+        - 大量取得注意
         """)
 
     # タブ
@@ -566,16 +570,39 @@ def main():
             ["PubMed（医学・生命科学）", "Semantic Scholar（全分野・引用数あり）", "Google Scholar（ブロック注意）"]
         )
 
+        # データソース別の推奨値と上限を設定
+        if "PubMed" in data_source:
+            max_limit = 200
+            default_value = 20
+            recommended = "推奨: 20-200件"
+        elif "Semantic Scholar" in data_source:
+            max_limit = 100
+            default_value = 20
+            recommended = "推奨: 20-100件"
+        else:  # Google Scholar
+            max_limit = 30
+            default_value = 10
+            recommended = "推奨: 10-30件（大量取得でブロックのリスク）"
+
         col1, col2 = st.columns([3, 1])
         with col1:
             query = st.text_input("検索キーワード", placeholder="例: mass spectrometry proteomics")
         with col2:
-            max_results = st.number_input("取得件数", min_value=1, max_value=100, value=10)
+            max_results = st.number_input(
+                f"取得件数（{recommended}）",
+                min_value=1,
+                max_value=max_limit,
+                value=default_value
+            )
 
         year_filter = st.checkbox("年で絞り込み")
         year_from = None
         if year_filter:
             year_from = st.slider("検索開始年", 2000, datetime.now().year, 2020)
+
+        # Google Scholarで大量取得時の警告
+        if "Google Scholar" in data_source and max_results > 20:
+            st.warning(f"⚠️ Google Scholarで{max_results}件取得すると約{max_results * 2}秒かかり、IPブロックのリスクがあります。")
 
         if st.button("🔍 論文を検索", type="primary"):
             if query:
