@@ -38,6 +38,8 @@ if 'papers' not in st.session_state:
     st.session_state.papers = []
 if 'gemini_api_key' not in st.session_state:
     st.session_state.gemini_api_key = ''
+if 'gemini_usage_count' not in st.session_state:
+    st.session_state.gemini_usage_count = 0
 
 
 # ==================== PubMed Crawler ====================
@@ -426,6 +428,10 @@ def summarize_papers_with_gemini(papers: List[Dict], api_key: str, search_keywor
 
         # API呼び出し
         response = model.generate_content(prompt)
+
+        # 使用回数をカウント
+        st.session_state.gemini_usage_count += 1
+
         return response.text
 
     except ImportError:
@@ -472,6 +478,55 @@ def main():
             st.session_state.gemini_api_key = api_key_input
 
         st.markdown("[APIキー取得方法](https://aistudio.google.com/app/apikey)")
+
+        # API使用状況表示
+        if st.session_state.gemini_api_key:
+            st.markdown("### 📊 API使用状況")
+
+            # 無料枠の制限（2024年12月時点）
+            FREE_TIER_LIMIT_PER_MINUTE = 15
+            FREE_TIER_LIMIT_PER_DAY = 1500
+
+            usage_count = st.session_state.gemini_usage_count
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("今セッション使用回数", usage_count)
+            with col2:
+                remaining = FREE_TIER_LIMIT_PER_DAY - usage_count
+                if remaining > 0:
+                    st.metric("推定残り回数", f"~{remaining}")
+                else:
+                    st.metric("推定残り回数", "制限超過の可能性")
+
+            # プログレスバー
+            progress = min(usage_count / FREE_TIER_LIMIT_PER_DAY, 1.0)
+            st.progress(progress)
+
+            # 制限情報
+            with st.expander("📌 無料枠の制限について"):
+                st.markdown("""
+                **Gemini API 無料枠（2024年12月時点）:**
+                - **1分あたり**: 15リクエスト
+                - **1日あたり**: 1,500リクエスト
+                - **1か月あたり**: 制限なし（日次制限内）
+
+                **注意事項:**
+                - 上記の使用回数はこのセッション中のみの記録です
+                - ブラウザを閉じるとリセットされます
+                - 実際の制限はGoogleアカウント全体で管理されます
+                - 詳細は [Google AI Studio](https://aistudio.google.com/) で確認できます
+
+                **制限を超えた場合:**
+                - 1分制限: 少し待ってから再試行
+                - 1日制限: 翌日まで待つか、有料プランを検討
+                """)
+
+            # リセットボタン
+            if st.button("🔄 カウンターをリセット"):
+                st.session_state.gemini_usage_count = 0
+                st.rerun()
+
         st.markdown("---")
 
         st.markdown("### 📊 データソース比較")
@@ -830,6 +885,11 @@ def main():
                         st.markdown("---")
                         st.markdown("### 📝 AI生成トレンド分析")
                         st.markdown(summary)
+
+                        # 使用回数を表示
+                        usage_info = f"📊 API使用回数: {st.session_state.gemini_usage_count} / 1500 (今セッション)"
+                        st.info(usage_info)
+
                         st.success("✅ AI要約完了！")
         else:
             st.info("まず「論文検索」タブで論文を取得してください")
