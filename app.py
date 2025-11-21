@@ -1,7 +1,7 @@
 """
-Mass Spectrometry 論文研究システム（全体傾向要約機能追加版）
-- 個別論文要約 → 全体傾向分析に変更
-- Semantic Scholar Rate limit対策
+論文研究アシスタント（Research Paper Assistant）
+- 複数データソース対応（PubMed, Semantic Scholar, Google Scholar）
+- 統計分析・AI要約・可視化機能搭載
 - Gemini API最新モデル対応
 """
 import streamlit as st
@@ -28,7 +28,7 @@ plt.rcParams['axes.unicode_minus'] = False
 
 # ページ設定
 st.set_page_config(
-    page_title="Mass Spectrometry 論文研究システム",
+    page_title="論文研究アシスタント",
     page_icon="📚",
     layout="wide"
 )
