@@ -417,8 +417,24 @@ def main():
                         if papers:
                             st.session_state.papers = papers
                             st.success(f"✅ {len(papers)}件の論文を取得しました")
+                            st.info("💡 データは「💾 保存データ」タブでいつでも確認・ダウンロードできます")
 
-                            for i, paper in enumerate(papers[:10], 1):
+                            # 取得した全ての論文を表示
+                            st.markdown(f"### 取得した論文一覧（全{len(papers)}件）")
+
+                            # 表示件数の選択
+                            display_count = st.selectbox(
+                                "表示件数",
+                                options=[10, 20, 50, 100, "全件表示"],
+                                index=0
+                            )
+
+                            if display_count == "全件表示":
+                                display_count = len(papers)
+
+                            papers_to_display = papers[:display_count]
+
+                            for i, paper in enumerate(papers_to_display, 1):
                                 with st.expander(f"📄 {i}. {paper['title'][:80]}..."):
                                     col1, col2 = st.columns([3, 1])
                                     with col1:
