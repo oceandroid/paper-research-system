@@ -359,7 +359,8 @@ def summarize_papers_with_gemini(papers: List[Dict], api_key: str, search_keywor
 
         # API設定
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        # gemini-1.5-flashは安定版で無料枠が大きい
+        model = genai.GenerativeModel('gemini-1.5-flash')
 
         # プロンプト作成
         papers_text = ""
@@ -406,7 +407,7 @@ def summarize_papers_with_gemini(papers: List[Dict], api_key: str, search_keywor
         elif "quota" in error_msg.lower() or "RESOURCE_EXHAUSTED" in error_msg:
             return f"❌ エラー: API利用制限に達しました。しばらく待ってから再試行してください。\n\n{full_error}"
         elif "404" in error_msg or "not found" in error_msg.lower() or "NOT_FOUND" in error_msg:
-            return f"❌ エラー: モデルが見つかりません。\n\ngemini-2.0-flash-expは実験的モデルです。利用できない場合は、代わりに'gemini-1.5-pro'または'gemini-1.5-flash'を試してください。\n\n{full_error}"
+            return f"❌ エラー: モデルが見つかりません。\n\n現在使用中: gemini-1.5-flash\n代替モデル: gemini-1.5-pro, gemini-1.5-flash-8b\n\n{full_error}"
         elif "PERMISSION_DENIED" in error_msg or "permission" in error_msg.lower():
             return f"❌ エラー: APIキーの権限が不足しています。新しいAPIキーを作成してください。\n\n{full_error}"
         elif "blocked" in error_msg.lower() or "SAFETY" in error_msg:
