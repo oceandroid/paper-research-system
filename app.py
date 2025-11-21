@@ -359,8 +359,8 @@ def summarize_papers_with_gemini(papers: List[Dict], api_key: str, search_keywor
 
         # API設定
         genai.configure(api_key=api_key)
-        # gemini-1.5-flashは安定版で無料枠が大きい
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # gemini-proは安定版で無料枠が大きい（2024年最新版）
+        model = genai.GenerativeModel('gemini-pro')
 
         # プロンプト作成
         papers_text = ""
