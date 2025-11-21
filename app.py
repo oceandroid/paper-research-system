@@ -8,6 +8,10 @@ import streamlit as st
 import sys
 import os
 from datetime import datetime, timedelta
+from dotenv import load_dotenv
+
+# 環境変数を読み込み
+load_dotenv()
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 import matplotlib
@@ -37,7 +41,8 @@ st.set_page_config(
 if 'papers' not in st.session_state:
     st.session_state.papers = []
 if 'gemini_api_key' not in st.session_state:
-    st.session_state.gemini_api_key = ''
+    # 環境変数から読み込み、なければ空文字列
+    st.session_state.gemini_api_key = os.getenv('GEMINI_API_KEY', '')
 if 'gemini_usage_count' not in st.session_state:
     st.session_state.gemini_usage_count = 0
 
