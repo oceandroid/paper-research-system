@@ -687,42 +687,8 @@ def main():
                     if paper.get('abstract') and paper['abstract'] != 'N/A':
                         st.markdown(f"**要旨**: {paper['abstract'][:400]}...")
 
-    # タブ2: 研究トレンド
+    # タブ2: 統計分析
     with tab2:
-        st.header("📈 研究トレンド分析")
-
-        if st.session_state.papers:
-            st.subheader("Year-wise Publication Trend")
-            years = [p['year'] for p in st.session_state.papers if p['year'] != 'N/A' and str(p['year']).isdigit()]
-
-            if years:
-                year_counts = Counter(years)
-                year_df = pd.DataFrame(list(year_counts.items()), columns=['Year', 'Count']).sort_values('Year')
-
-                fig, ax = plt.subplots(figsize=(12, 6))
-                ax.plot(year_df['Year'], year_df['Count'], marker='o', linewidth=2, markersize=8)
-                ax.set_xlabel('Year', fontsize=12)
-                ax.set_ylabel('Number of Papers', fontsize=12)
-                ax.set_title('Publication Trend by Year', fontsize=14, fontweight='bold')
-                ax.grid(True, alpha=0.3)
-                st.pyplot(fig)
-
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Papers", len(years))
-                with col2:
-                    peak_year = year_counts.most_common(1)[0][0]
-                    st.metric("Peak Year", peak_year)
-                with col3:
-                    avg_per_year = len(years) / len(year_counts) if year_counts else 0
-                    st.metric("Avg/Year", f"{avg_per_year:.1f}")
-            else:
-                st.warning("年データが不足しています")
-        else:
-            st.info("まず「論文検索」タブで論文を取得してください")
-
-    # タブ3: 統計的全体傾向分析
-    with tab3:
         st.header("📊 統計分析")
         st.markdown("検索した論文全体の研究トレンドを統計的に分析します（APIキー不要）")
 
@@ -846,8 +812,8 @@ def main():
         else:
             st.info("まず「論文検索」タブで論文を取得してください")
 
-    # タブ4: AI要約
-    with tab4:
+    # タブ3: AI要約
+    with tab3:
         st.header("🤖 AI要約（Gemini）")
         st.markdown("""
         Google Gemini AIを使って、検索した論文の**タイトル**と**要旨（Abstract）**から、
@@ -893,8 +859,8 @@ def main():
         else:
             st.info("まず「論文検索」タブで論文を取得してください")
 
-    # タブ5: ワードクラウド
-    with tab5:
+    # タブ4: ワードクラウド
+    with tab4:
         st.header("☁️ ワードクラウド生成")
         st.markdown("""
         検索した論文の**タイトル**と**要旨（Abstract）**から頻出単語を抽出し、
@@ -929,8 +895,8 @@ def main():
         else:
             st.info("まず「論文検索」タブで論文を取得してください")
 
-    # タブ6: 共起ネットワーク
-    with tab6:
+    # タブ5: 共起ネットワーク
+    with tab5:
         st.header("🕸️ 共起ネットワーク解析")
         st.markdown("""
         検索した論文の**タイトル**と**要旨（Abstract）**から、
@@ -1001,8 +967,8 @@ def main():
         else:
             st.info("まず「論文検索」タブで論文を取得してください")
 
-    # タブ7: 保存データ
-    with tab7:
+    # タブ6: 保存データ
+    with tab6:
         st.header("💾 保存されたデータ")
         if st.session_state.papers:
             st.subheader("🏆 引用数ランキング（Top 10）")
