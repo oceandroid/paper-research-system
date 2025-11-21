@@ -360,26 +360,42 @@ def summarize_papers_with_gemini(papers: List[Dict], api_key: str, search_keywor
         # API設定
         genai.configure(api_key=api_key)
 
-        # 利用可能なモデルを試す（フォールバック方式）
-        model_names = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro', 'gemini-1.0-pro']
+        # 利用可能なモデルを自動検出して使用
         model = None
+        selected_model_name = None
 
-        for model_name in model_names:
-            try:
-                model = genai.GenerativeModel(model_name)
-                # テスト用に軽いコンテンツ生成を試みる
-                break
-            except Exception as e:
-                continue
+        try:
+            # 利用可能なモデルをリスト取得
+            available_models = list(genai.list_models())
 
-        if model is None:
-            # すべてのモデルが失敗した場合、利用可能なモデルをリスト
-            try:
-                available_models = genai.list_models()
-                model_list = "\n".join([m.name for m in available_models if 'generateContent' in m.supported_generation_methods])
-                return f"❌ エラー: 利用可能なモデルが見つかりませんでした。\n\n以下のモデルが利用可能です:\n{model_list}\n\nライブラリを最新版に更新してください:\npip install --upgrade google-generativeai"
-            except:
-                return "❌ エラー: Gemini APIに接続できません。APIキーを確認してください。"
+            # generateContentをサポートするモデルを優先順位順に試す
+            preferred_names = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro', 'gemini-1.0-pro']
+
+            # まず優先モデル名を含むモデルを探す
+            for pref_name in preferred_names:
+                for m in available_models:
+                    if pref_name in m.name and 'generateContent' in m.supported_generation_methods:
+                        model = genai.GenerativeModel(m.name)
+                        selected_model_name = m.name
+                        break
+                if model:
+                    break
+
+            # 優先モデルが見つからない場合、最初に見つかったgenerateContent対応モデルを使用
+            if model is None:
+                for m in available_models:
+                    if 'generateContent' in m.supported_generation_methods:
+                        model = genai.GenerativeModel(m.name)
+                        selected_model_name = m.name
+                        break
+
+            if model is None:
+                # generateContent対応モデルが見つからない
+                model_list = "\n".join([m.name for m in available_models])
+                return f"❌ エラー: generateContentをサポートするモデルが見つかりませんでした。\n\n利用可能なモデル:\n{model_list}\n\nライブラリを最新版に更新してください:\npip install --upgrade google-generativeai"
+
+        except Exception as e:
+            return f"❌ エラー: モデルの取得に失敗しました。\n\nエラー: {str(e)}\n\nAPIキーを確認してください。"
 
         # プロンプト作成
         papers_text = ""
@@ -426,7 +442,7 @@ def summarize_papers_with_gemini(papers: List[Dict], api_key: str, search_keywor
         elif "quota" in error_msg.lower() or "RESOURCE_EXHAUSTED" in error_msg:
             return f"❌ エラー: API利用制限に達しました。しばらく待ってから再試行してください。\n\n{full_error}"
         elif "404" in error_msg or "not found" in error_msg.lower() or "NOT_FOUND" in error_msg:
-            return f"❌ エラー: モデルが見つかりません。\n\n試したモデル: {', '.join(model_names)}\n\n{full_error}\n\n💡 google-generativeaiライブラリを更新してください:\npip install --upgrade google-generativeai"
+            return f"❌ エラー: モデルが見つかりません。\n\n{full_error}\n\n💡 google-generativeaiライブラリを更新してください:\npip install --upgrade google-generativeai"
         elif "PERMISSION_DENIED" in error_msg or "permission" in error_msg.lower():
             return f"❌ エラー: APIキーの権限が不足しています。新しいAPIキーを作成してください。\n\n{full_error}"
         elif "blocked" in error_msg.lower() or "SAFETY" in error_msg:
