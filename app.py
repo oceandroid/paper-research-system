@@ -418,42 +418,51 @@ def main():
                             st.session_state.papers = papers
                             st.success(f"✅ {len(papers)}件の論文を取得しました")
                             st.info("💡 データは「💾 保存データ」タブでいつでも確認・ダウンロードできます")
-
-                            # 取得した全ての論文を表示
-                            st.markdown(f"### 取得した論文一覧（全{len(papers)}件）")
-
-                            # 表示件数の選択
-                            display_count = st.selectbox(
-                                "表示件数",
-                                options=[10, 20, 50, 100, "全件表示"],
-                                index=0
-                            )
-
-                            if display_count == "全件表示":
-                                display_count = len(papers)
-
-                            papers_to_display = papers[:display_count]
-
-                            for i, paper in enumerate(papers_to_display, 1):
-                                with st.expander(f"📄 {i}. {paper['title'][:80]}..."):
-                                    col1, col2 = st.columns([3, 1])
-                                    with col1:
-                                        authors_str = ', '.join(paper['authors'][:3]) if isinstance(paper['authors'], list) else paper['authors']
-                                        st.markdown(f"**著者**: {authors_str}")
-                                        st.markdown(f"**年**: {paper['year']}")
-                                        st.markdown(f"**掲載**: {paper.get('venue', 'N/A')}")
-                                        st.markdown(f"**URL**: [{paper['url']}]({paper['url']})")
-                                    with col2:
-                                        if paper.get('citations', 0) > 0:
-                                            st.metric("引用数", paper['citations'])
-
-                                    if paper.get('abstract') and paper['abstract'] != 'N/A':
-                                        st.markdown(f"**要旨**: {paper['abstract'][:400]}...")
                         else:
                             st.warning("論文が見つかりませんでした")
 
                     except Exception as e:
                         st.error(f"エラー: {e}")
+
+        # 検索結果の表示（検索ボタンの外に配置）
+        if st.session_state.papers:
+            st.markdown("---")
+            st.markdown(f"### 📄 検索結果（全{len(st.session_state.papers)}件）")
+
+            # 表示件数の選択
+            display_options = [10, 20, 50, 100]
+            if len(st.session_state.papers) > 100:
+                display_options.append("全件表示")
+            else:
+                display_options.append(f"全{len(st.session_state.papers)}件")
+
+            display_count = st.selectbox(
+                "表示件数",
+                options=display_options,
+                index=0,
+                key="display_count_select"
+            )
+
+            if isinstance(display_count, str):  # "全件表示" or "全X件"
+                display_count = len(st.session_state.papers)
+
+            papers_to_display = st.session_state.papers[:display_count]
+
+            for i, paper in enumerate(papers_to_display, 1):
+                with st.expander(f"📄 {i}. {paper['title'][:80]}..."):
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        authors_str = ', '.join(paper['authors'][:3]) if isinstance(paper['authors'], list) else paper['authors']
+                        st.markdown(f"**著者**: {authors_str}")
+                        st.markdown(f"**年**: {paper['year']}")
+                        st.markdown(f"**掲載**: {paper.get('venue', 'N/A')}")
+                        st.markdown(f"**URL**: [{paper['url']}]({paper['url']})")
+                    with col2:
+                        if paper.get('citations', 0) > 0:
+                            st.metric("引用数", paper['citations'])
+
+                    if paper.get('abstract') and paper['abstract'] != 'N/A':
+                        st.markdown(f"**要旨**: {paper['abstract'][:400]}...")
 
     # タブ2: 研究トレンド
     with tab2:
