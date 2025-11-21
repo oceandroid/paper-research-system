@@ -36,6 +36,8 @@ st.set_page_config(
 # セッションステート初期化
 if 'papers' not in st.session_state:
     st.session_state.papers = []
+if 'gemini_api_key' not in st.session_state:
+    st.session_state.gemini_api_key = ''
 
 
 # ==================== PubMed Crawler ====================
@@ -349,6 +351,61 @@ def build_cooccurrence_network(papers: List[Dict], top_keywords: int = 30, windo
     return keywords, cooccurrence
 
 
+# ==================== Gemini AI要約 ====================
+def summarize_papers_with_gemini(papers: List[Dict], api_key: str, search_keyword: str) -> str:
+    """Gemini APIを使って論文全体のトレンドと考察を生成"""
+    try:
+        import google.generativeai as genai
+
+        # API設定
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+
+        # プロンプト作成
+        papers_text = ""
+        for i, paper in enumerate(papers[:20], 1):  # 最大20件まで
+            abstract = paper.get('abstract', 'N/A')
+            if abstract == 'N/A':
+                abstract = "Abstract not available"
+            papers_text += f"\n[Paper {i}]\nTitle: {paper['title']}\nYear: {paper['year']}\nAbstract: {abstract[:500]}...\n"
+
+        prompt = f"""
+あなたは研究トレンド分析の専門家です。以下の論文データを分析し、「{search_keyword}」に関する研究トレンドと考察を日本語で提供してください。
+
+【論文データ】
+{papers_text}
+
+【分析内容】
+1. **研究トレンドの概要**: この分野で現在注目されているテーマやアプローチ
+2. **時系列的な変化**: 年代による研究の変遷や新しい動向
+3. **主要な研究方向性**: どのような研究課題や応用分野が主流か
+4. **今後の展望**: この分野の今後の発展可能性や注目すべきポイント
+
+【出力形式】
+- 各セクションを見出し付きで構造化
+- 具体的な論文タイトルを引用しながら説明
+- 専門的かつ分かりやすい表現で記述
+- 合計800-1200文字程度
+"""
+
+        # API呼び出し
+        response = model.generate_content(prompt)
+        return response.text
+
+    except ImportError:
+        return "❌ エラー: google-generativeai ライブラリがインストールされていません。\n\n`pip install google-generativeai` を実行してください。"
+    except Exception as e:
+        error_msg = str(e)
+        if "API_KEY_INVALID" in error_msg or "invalid API key" in error_msg.lower():
+            return "❌ エラー: APIキーが無効です。正しいGemini APIキーを入力してください。"
+        elif "429" in error_msg or "quota" in error_msg.lower():
+            return "❌ エラー: API利用制限に達しました。しばらく待ってから再試行してください。"
+        elif "404" in error_msg or "not found" in error_msg.lower():
+            return f"❌ エラー: モデルが見つかりません。Gemini APIの最新モデル名を確認してください。\n\n詳細: {error_msg}"
+        else:
+            return f"❌ エラー: {error_msg}"
+
+
 # ==================== メインアプリケーション ====================
 def main():
     st.title("📚 Mass Spectrometry 論文研究システム")
@@ -358,6 +415,20 @@ def main():
     # サイドバー
     with st.sidebar:
         st.header("⚙️ 設定")
+
+        st.markdown("### 🤖 Gemini API設定")
+        api_key_input = st.text_input(
+            "Gemini APIキー",
+            type="password",
+            value=st.session_state.gemini_api_key,
+            placeholder="AIキーを入力（AI要約機能用）"
+        )
+        if api_key_input:
+            st.session_state.gemini_api_key = api_key_input
+
+        st.markdown("[APIキー取得方法](https://aistudio.google.com/app/apikey)")
+        st.markdown("---")
+
         st.markdown("### 📊 データソース比較")
         st.markdown("""
         **PubMed**
@@ -376,8 +447,8 @@ def main():
         """)
 
     # タブ
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📚 論文検索", "📈 研究トレンド", "📊 統計分析",
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+        "📚 論文検索", "📈 研究トレンド", "📊 統計分析", "🤖 AI要約",
         "☁️ ワードクラウド", "🕸️ 共起ネットワーク", "💾 保存データ"
     ])
 
@@ -416,6 +487,7 @@ def main():
 
                         if papers:
                             st.session_state.papers = papers
+                            st.session_state.search_keyword = query  # 検索キーワードを保存
                             st.success(f"✅ {len(papers)}件の論文を取得しました")
                             st.info("💡 データは「💾 保存データ」タブでいつでも確認・ダウンロードできます")
                         else:
@@ -551,7 +623,7 @@ def main():
 
     # タブ3: 統計的全体傾向分析
     with tab3:
-        st.header("📊 全体傾向の統計分析")
+        st.header("📊 統計分析")
         st.markdown("検索した論文全体の研究トレンドを統計的に分析します（APIキー不要）")
 
         if st.session_state.papers:
@@ -674,8 +746,51 @@ def main():
         else:
             st.info("まず「論文検索」タブで論文を取得してください")
 
-    # タブ4: ワードクラウド
+    # タブ4: AI要約
     with tab4:
+        st.header("🤖 AI要約（Gemini）")
+        st.markdown("""
+        ### 📖 AI要約とは？
+        Google Gemini AIを使って、検索した論文の**タイトル**と**要旨（Abstract）**から、
+        研究トレンドと考察を自動生成します。
+
+        **分析内容:**
+        - 研究トレンドの概要
+        - 時系列的な変化
+        - 主要な研究方向性
+        - 今後の展望
+
+        **注意:** Gemini APIキーが必要です（サイドバーで設定）
+        """)
+        st.markdown("---")
+
+        if st.session_state.papers:
+            if not st.session_state.gemini_api_key:
+                st.warning("⚠️ Gemini APIキーが設定されていません。サイドバーで設定してください。")
+            else:
+                st.info(f"📊 現在 {len(st.session_state.papers)} 件の論文データがあります（最大20件まで分析）")
+
+                # 検索キーワードの取得（session_stateに保存する）
+                if 'search_keyword' not in st.session_state:
+                    st.session_state.search_keyword = st.session_state.papers[0].get('keyword', 'Unknown') if st.session_state.papers else 'Unknown'
+
+                if st.button("🤖 AI要約を生成", type="primary"):
+                    with st.spinner("Gemini AIが分析中...（30秒程度かかります）"):
+                        summary = summarize_papers_with_gemini(
+                            st.session_state.papers,
+                            st.session_state.gemini_api_key,
+                            st.session_state.search_keyword
+                        )
+
+                        st.markdown("---")
+                        st.markdown("### 📝 AI生成トレンド分析")
+                        st.markdown(summary)
+                        st.success("✅ AI要約完了！")
+        else:
+            st.info("まず「論文検索」タブで論文を取得してください")
+
+    # タブ5: ワードクラウド
+    with tab5:
         st.header("☁️ ワードクラウド生成")
         st.markdown("""
         ### 📖 ワードクラウドとは？
@@ -711,8 +826,8 @@ def main():
         else:
             st.info("まず「論文検索」タブで論文を取得してください")
 
-    # タブ5: 共起ネットワーク
-    with tab5:
+    # タブ6: 共起ネットワーク
+    with tab6:
         st.header("🕸️ 共起ネットワーク解析")
         st.markdown("""
         ### 📖 共起ネットワークとは？
@@ -784,8 +899,8 @@ def main():
         else:
             st.info("まず「論文検索」タブで論文を取得してください")
 
-    # タブ6: 保存データ
-    with tab6:
+    # タブ7: 保存データ
+    with tab7:
         st.header("💾 保存されたデータ")
         if st.session_state.papers:
             st.subheader("🏆 引用数ランキング（Top 10）")
