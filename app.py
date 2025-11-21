@@ -36,10 +36,6 @@ st.set_page_config(
 # セッションステート初期化
 if 'papers' not in st.session_state:
     st.session_state.papers = []
-if 'summaries' not in st.session_state:
-    st.session_state.summaries = {}
-if 'gemini_api_key' not in st.session_state:
-    st.session_state.gemini_api_key = ""
 
 
 # ==================== PubMed Crawler ====================
@@ -316,55 +312,6 @@ class ScholarCrawler:
         return self.search_papers(keyword, max_results, year_from)
 
 
-# ==================== AI全体傾向要約（Gemini API）====================
-def summarize_overall_trends_with_gemini(papers: List[Dict], api_key: str) -> str:
-    """Gemini APIで論文全体の傾向を要約"""
-    try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-
-        # モデル選択（フォールバック付き）
-        try:
-            model = genai.GenerativeModel('gemini-1.5-pro-latest')
-        except:
-            try:
-                model = genai.GenerativeModel('gemini-1.5-flash')
-            except:
-                model = genai.GenerativeModel('gemini-pro')
-
-        # 論文データを集約
-        papers_summary = []
-        for i, paper in enumerate(papers, 1):
-            abstract = paper['abstract'] if paper['abstract'] != 'N/A' else "No abstract"
-            papers_summary.append(f"{i}. {paper['title']} ({paper['year']})\n   概要: {abstract[:200]}...")
-
-        combined_text = "\n\n".join(papers_summary)
-
-        # プロンプト作成
-        prompt = f"""以下の{len(papers)}件の質量分析（Mass Spectrometry）関連論文を分析し、研究全体の傾向を日本語で要約してください。
-
-【論文リスト】
-{combined_text}
-
-【分析項目】
-1. **主要な研究テーマ**: どのような研究テーマが中心か？
-2. **使用されている手法**: 共通して用いられている分析手法や技術は？
-3. **研究の時系列トレンド**: 年代によって研究の焦点がどう変化しているか？
-4. **注目すべきキーワード**: 頻出する重要なキーワードは？
-5. **今後の研究方向性**: これらの論文から見える今後の研究の方向性は？
-
-各項目について、3-5文程度で簡潔に説明してください。"""
-
-        # API呼び出し
-        response = model.generate_content(prompt)
-        return response.text
-
-    except Exception as e:
-        st.error(f"Gemini API エラー: {e}")
-        st.info("💡 APIキーが正しいか確認してください。https://makersuite.google.com/app/apikey")
-        return None
-
-
 # ==================== テキスト解析 ====================
 def extract_keywords(text: str, min_length: int = 4, top_n: int = 50) -> List[str]:
     """テキストからキーワードを抽出"""
@@ -408,20 +355,9 @@ def main():
     st.markdown("高度な論文分析・トレンド解析・AI要約システム")
     st.markdown("---")
 
-    # サイドバー: API Key設定
+    # サイドバー
     with st.sidebar:
         st.header("⚙️ 設定")
-        gemini_key = st.text_input(
-            "Google Gemini API Key",
-            type="password",
-            value=st.session_state.gemini_api_key,
-            help="https://makersuite.google.com/app/apikey"
-        )
-        if gemini_key:
-            st.session_state.gemini_api_key = gemini_key
-            st.success("✅ APIキー設定済み")
-
-        st.markdown("---")
         st.markdown("### 📊 データソース比較")
         st.markdown("""
         **PubMed**
@@ -441,8 +377,8 @@ def main():
 
     # タブ
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📚 論文検索", "📈 研究トレンド", "🤖 全体傾向要約",
-        "📊 ワードクラウド", "🕸️ 共起ネットワーク", "💾 保存データ"
+        "📚 論文検索", "📈 研究トレンド", "📊 統計分析",
+        "☁️ ワードクラウド", "🕸️ 共起ネットワーク", "💾 保存データ"
     ])
 
     # タブ1: 論文検索
@@ -537,54 +473,128 @@ def main():
         else:
             st.info("まず「論文検索」タブで論文を取得してください")
 
-    # タブ3: 全体傾向要約（修正版）
+    # タブ3: 統計的全体傾向分析
     with tab3:
-        st.header("🤖 全体傾向の要約")
-        st.markdown("検索した論文全体の研究トレンドをAIで分析します")
+        st.header("📊 全体傾向の統計分析")
+        st.markdown("検索した論文全体の研究トレンドを統計的に分析します（APIキー不要）")
 
         if st.session_state.papers:
-            if not st.session_state.gemini_api_key:
-                st.warning("⚠️ サイドバーでGemini API Keyを設定してください")
-                st.markdown("[Google AI Studio](https://makersuite.google.com/app/apikey)で無料取得")
-            else:
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    st.info(f"現在 {len(st.session_state.papers)} 件の論文データがあります")
-                with col2:
-                    max_analyze = st.slider("分析論文数", 5, min(50, len(st.session_state.papers)), min(20, len(st.session_state.papers)))
+            if st.button("📊 統計分析を実行", type="primary"):
+                papers_to_analyze = st.session_state.papers
 
-                if st.button("🤖 全体傾向を分析", type="primary"):
-                    papers_to_analyze = st.session_state.papers[:max_analyze]
+                with st.spinner("分析中..."):
+                    # 1. 基本統計
+                    st.markdown("---")
+                    st.markdown("### 📈 基本統計")
+                    col1, col2, col3, col4 = st.columns(4)
 
-                    with st.spinner(f"{len(papers_to_analyze)}件の論文から全体傾向を分析中..."):
-                        trend_summary = summarize_overall_trends_with_gemini(
-                            papers_to_analyze,
-                            st.session_state.gemini_api_key
-                        )
+                    with col1:
+                        st.metric("総論文数", len(papers_to_analyze))
 
-                        if trend_summary:
-                            st.success(f"✅ {len(papers_to_analyze)}件の論文の全体傾向分析が完了しました")
-                            st.markdown("---")
-                            st.markdown("### 📊 研究トレンド分析結果")
-                            st.markdown(trend_summary)
+                    with col2:
+                        years = [p['year'] for p in papers_to_analyze if p['year'] != 'N/A' and str(p['year']).isdigit()]
+                        if years:
+                            year_range = f"{min(years)}-{max(years)}"
+                            st.metric("対象年範囲", year_range)
 
-                            # 基本統計も表示
-                            st.markdown("---")
-                            st.markdown("### 📈 基本統計")
-                            col1, col2, col3 = st.columns(3)
+                    with col3:
+                        total_citations = sum([p.get('citations', 0) for p in papers_to_analyze])
+                        st.metric("総引用数", total_citations)
 
-                            with col1:
-                                st.metric("分析論文数", len(papers_to_analyze))
+                    with col4:
+                        avg_citations = total_citations / len(papers_to_analyze) if papers_to_analyze else 0
+                        st.metric("平均引用数", f"{avg_citations:.1f}")
 
-                            with col2:
-                                years = [p['year'] for p in papers_to_analyze if p['year'] != 'N/A' and str(p['year']).isdigit()]
-                                if years:
-                                    year_range = f"{min(years)}-{max(years)}"
-                                    st.metric("対象年範囲", year_range)
+                    # 2. 頻出キーワード分析
+                    st.markdown("---")
+                    st.markdown("### 🔑 頻出キーワード Top 20")
+                    all_text = " ".join([f"{p['title']} {p['abstract']}" for p in papers_to_analyze if p['abstract'] != 'N/A'])
+                    keywords = extract_keywords(all_text, min_length=5, top_n=20)
 
-                            with col3:
-                                total_citations = sum([p.get('citations', 0) for p in papers_to_analyze])
-                                st.metric("総引用数", total_citations)
+                    if keywords:
+                        # キーワードの出現回数を計算
+                        keyword_counts = Counter()
+                        for paper in papers_to_analyze:
+                            text = f"{paper['title']} {paper['abstract']}".lower()
+                            for kw in keywords:
+                                keyword_counts[kw] += text.count(kw)
+
+                        # 棒グラフで表示
+                        kw_df = pd.DataFrame(list(keyword_counts.most_common(20)), columns=['Keyword', 'Count'])
+                        fig, ax = plt.subplots(figsize=(12, 6))
+                        ax.barh(kw_df['Keyword'], kw_df['Count'], color='skyblue')
+                        ax.set_xlabel('Frequency', fontsize=12)
+                        ax.set_ylabel('Keywords', fontsize=12)
+                        ax.set_title('Top 20 Keywords', fontsize=14, fontweight='bold')
+                        ax.invert_yaxis()
+                        st.pyplot(fig)
+
+                    # 3. 年代別キーワード分析
+                    st.markdown("---")
+                    st.markdown("### 📅 年代別の主要キーワード")
+                    if years:
+                        year_keywords = {}
+                        for year in sorted(set(years)):
+                            year_papers = [p for p in papers_to_analyze if str(p['year']) == str(year)]
+                            year_text = " ".join([f"{p['title']} {p['abstract']}" for p in year_papers if p['abstract'] != 'N/A'])
+                            year_kws = extract_keywords(year_text, min_length=5, top_n=5)
+                            year_keywords[year] = year_kws
+
+                        for year in sorted(year_keywords.keys()):
+                            st.markdown(f"**{year}年**: {', '.join(year_keywords[year][:5])}")
+
+                    # 4. 主要著者分析
+                    st.markdown("---")
+                    st.markdown("### 👥 主要著者 Top 10")
+                    all_authors = []
+                    for paper in papers_to_analyze:
+                        authors = paper['authors']
+                        if isinstance(authors, list):
+                            all_authors.extend(authors)
+                        else:
+                            all_authors.append(authors)
+
+                    author_counts = Counter(all_authors)
+                    top_authors = author_counts.most_common(10)
+
+                    if top_authors:
+                        author_df = pd.DataFrame(top_authors, columns=['Author', 'Papers'])
+                        st.dataframe(author_df, use_container_width=True)
+
+                    # 5. 掲載ジャーナル分析
+                    st.markdown("---")
+                    st.markdown("### 📚 主要掲載ジャーナル Top 10")
+                    venues = [p['venue'] for p in papers_to_analyze if p.get('venue') and p['venue'] != 'N/A']
+                    venue_counts = Counter(venues)
+                    top_venues = venue_counts.most_common(10)
+
+                    if top_venues:
+                        venue_df = pd.DataFrame(top_venues, columns=['Journal', 'Papers'])
+                        st.dataframe(venue_df, use_container_width=True)
+
+                    # 6. 引用数分布
+                    st.markdown("---")
+                    st.markdown("### 📊 引用数分布")
+                    citations = [p.get('citations', 0) for p in papers_to_analyze if p.get('citations', 0) > 0]
+
+                    if citations:
+                        fig, ax = plt.subplots(figsize=(12, 5))
+                        ax.hist(citations, bins=20, color='lightcoral', edgecolor='black', alpha=0.7)
+                        ax.set_xlabel('Citations', fontsize=12)
+                        ax.set_ylabel('Number of Papers', fontsize=12)
+                        ax.set_title('Citation Distribution', fontsize=14, fontweight='bold')
+                        ax.grid(True, alpha=0.3)
+                        st.pyplot(fig)
+
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("最多引用数", max(citations))
+                        with col2:
+                            st.metric("中央値", int(pd.Series(citations).median()))
+                        with col3:
+                            st.metric("平均値", f"{pd.Series(citations).mean():.1f}")
+
+                    st.success("✅ 統計分析完了！")
         else:
             st.info("まず「論文検索」タブで論文を取得してください")
 
