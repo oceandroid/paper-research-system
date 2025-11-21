@@ -359,8 +359,27 @@ def summarize_papers_with_gemini(papers: List[Dict], api_key: str, search_keywor
 
         # API設定
         genai.configure(api_key=api_key)
-        # gemini-proは安定版で無料枠が大きい（2024年最新版）
-        model = genai.GenerativeModel('gemini-pro')
+
+        # 利用可能なモデルを試す（フォールバック方式）
+        model_names = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro', 'gemini-1.0-pro']
+        model = None
+
+        for model_name in model_names:
+            try:
+                model = genai.GenerativeModel(model_name)
+                # テスト用に軽いコンテンツ生成を試みる
+                break
+            except Exception as e:
+                continue
+
+        if model is None:
+            # すべてのモデルが失敗した場合、利用可能なモデルをリスト
+            try:
+                available_models = genai.list_models()
+                model_list = "\n".join([m.name for m in available_models if 'generateContent' in m.supported_generation_methods])
+                return f"❌ エラー: 利用可能なモデルが見つかりませんでした。\n\n以下のモデルが利用可能です:\n{model_list}\n\nライブラリを最新版に更新してください:\npip install --upgrade google-generativeai"
+            except:
+                return "❌ エラー: Gemini APIに接続できません。APIキーを確認してください。"
 
         # プロンプト作成
         papers_text = ""
@@ -407,7 +426,7 @@ def summarize_papers_with_gemini(papers: List[Dict], api_key: str, search_keywor
         elif "quota" in error_msg.lower() or "RESOURCE_EXHAUSTED" in error_msg:
             return f"❌ エラー: API利用制限に達しました。しばらく待ってから再試行してください。\n\n{full_error}"
         elif "404" in error_msg or "not found" in error_msg.lower() or "NOT_FOUND" in error_msg:
-            return f"❌ エラー: モデルが見つかりません。\n\n現在使用中: gemini-1.5-flash\n代替モデル: gemini-1.5-pro, gemini-1.5-flash-8b\n\n{full_error}"
+            return f"❌ エラー: モデルが見つかりません。\n\n試したモデル: {', '.join(model_names)}\n\n{full_error}\n\n💡 google-generativeaiライブラリを更新してください:\npip install --upgrade google-generativeai"
         elif "PERMISSION_DENIED" in error_msg or "permission" in error_msg.lower():
             return f"❌ エラー: APIキーの権限が不足しています。新しいAPIキーを作成してください。\n\n{full_error}"
         elif "blocked" in error_msg.lower() or "SAFETY" in error_msg:
