@@ -429,24 +429,75 @@ def main():
             st.markdown("---")
             st.markdown(f"### 📄 検索結果（全{len(st.session_state.papers)}件）")
 
-            # 表示件数の選択
-            display_options = [10, 20, 50, 100]
-            if len(st.session_state.papers) > 100:
-                display_options.append("全件表示")
-            else:
-                display_options.append(f"全{len(st.session_state.papers)}件")
+            # ソートと表示件数の選択
+            col1, col2 = st.columns([1, 1])
 
-            display_count = st.selectbox(
-                "表示件数",
-                options=display_options,
-                index=0,
-                key="display_count_select"
-            )
+            with col1:
+                sort_option = st.selectbox(
+                    "並び替え",
+                    options=[
+                        "関連性順（デフォルト）",
+                        "新しい順（年降順）",
+                        "古い順（年昇順）",
+                        "引用数順（多い順）",
+                        "著者名順（A-Z）",
+                        "ジャーナル名順（A-Z）"
+                    ],
+                    index=0,
+                    key="sort_option_select"
+                )
+
+            with col2:
+                display_options = [10, 20, 50, 100]
+                if len(st.session_state.papers) > 100:
+                    display_options.append("全件表示")
+                else:
+                    display_options.append(f"全{len(st.session_state.papers)}件")
+
+                display_count = st.selectbox(
+                    "表示件数",
+                    options=display_options,
+                    index=0,
+                    key="display_count_select"
+                )
+
+            # ソート処理
+            sorted_papers = st.session_state.papers.copy()
+
+            if sort_option == "新しい順（年降順）":
+                sorted_papers = sorted(
+                    sorted_papers,
+                    key=lambda x: int(x['year']) if x['year'] != 'N/A' and str(x['year']).isdigit() else 0,
+                    reverse=True
+                )
+            elif sort_option == "古い順（年昇順）":
+                sorted_papers = sorted(
+                    sorted_papers,
+                    key=lambda x: int(x['year']) if x['year'] != 'N/A' and str(x['year']).isdigit() else 9999,
+                    reverse=False
+                )
+            elif sort_option == "引用数順（多い順）":
+                sorted_papers = sorted(
+                    sorted_papers,
+                    key=lambda x: x.get('citations', 0),
+                    reverse=True
+                )
+            elif sort_option == "著者名順（A-Z）":
+                sorted_papers = sorted(
+                    sorted_papers,
+                    key=lambda x: (x['authors'][0] if isinstance(x['authors'], list) and len(x['authors']) > 0 else x['authors']) if x['authors'] else 'zzz'
+                )
+            elif sort_option == "ジャーナル名順（A-Z）":
+                sorted_papers = sorted(
+                    sorted_papers,
+                    key=lambda x: x.get('venue', 'zzz') if x.get('venue') != 'N/A' else 'zzz'
+                )
+            # 関連性順（デフォルト）の場合は何もしない
 
             if isinstance(display_count, str):  # "全件表示" or "全X件"
-                display_count = len(st.session_state.papers)
+                display_count = len(sorted_papers)
 
-            papers_to_display = st.session_state.papers[:display_count]
+            papers_to_display = sorted_papers[:display_count]
 
             for i, paper in enumerate(papers_to_display, 1):
                 with st.expander(f"📄 {i}. {paper['title'][:80]}..."):
