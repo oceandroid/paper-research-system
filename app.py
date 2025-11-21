@@ -174,7 +174,7 @@ class SemanticScholarCrawler:
         papers = []
         try:
             search_url = f"{self.base_url}/paper/search"
-            limit_per_request = min(max_results, 10)
+            limit_per_request = min(max_results, 100)  # Semantic Scholarは100件まで対応
             params = {
                 'query': keyword, 'limit': limit_per_request,
                 'fields': 'title,authors,year,abstract,venue,citationCount,externalIds,url'
@@ -394,7 +394,7 @@ def main():
         with col1:
             query = st.text_input("検索キーワード", placeholder="例: mass spectrometry proteomics")
         with col2:
-            max_results = st.number_input("取得件数", min_value=1, max_value=20, value=10)
+            max_results = st.number_input("取得件数", min_value=1, max_value=100, value=10)
 
         year_filter = st.checkbox("年で絞り込み")
         year_from = None
