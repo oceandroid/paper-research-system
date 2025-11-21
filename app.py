@@ -396,14 +396,23 @@ def summarize_papers_with_gemini(papers: List[Dict], api_key: str, search_keywor
         return "❌ エラー: google-generativeai ライブラリがインストールされていません。\n\n`pip install google-generativeai` を実行してください。"
     except Exception as e:
         error_msg = str(e)
-        if "API_KEY_INVALID" in error_msg or "invalid API key" in error_msg.lower():
-            return "❌ エラー: APIキーが無効です。正しいGemini APIキーを入力してください。"
-        elif "429" in error_msg or "quota" in error_msg.lower():
-            return "❌ エラー: API利用制限に達しました。しばらく待ってから再試行してください。"
-        elif "404" in error_msg or "not found" in error_msg.lower():
-            return f"❌ エラー: モデルが見つかりません。Gemini APIの最新モデル名を確認してください。\n\n詳細: {error_msg}"
+        error_type = type(e).__name__
+
+        # より詳細なエラー情報を表示
+        full_error = f"エラータイプ: {error_type}\nエラー内容: {error_msg}"
+
+        if "API_KEY_INVALID" in error_msg or "invalid" in error_msg.lower() and "key" in error_msg.lower():
+            return f"❌ エラー: APIキーが無効です。正しいGemini APIキーを入力してください。\n\n{full_error}"
+        elif "quota" in error_msg.lower() or "RESOURCE_EXHAUSTED" in error_msg:
+            return f"❌ エラー: API利用制限に達しました。しばらく待ってから再試行してください。\n\n{full_error}"
+        elif "404" in error_msg or "not found" in error_msg.lower() or "NOT_FOUND" in error_msg:
+            return f"❌ エラー: モデルが見つかりません。\n\ngemini-2.0-flash-expは実験的モデルです。利用できない場合は、代わりに'gemini-1.5-pro'または'gemini-1.5-flash'を試してください。\n\n{full_error}"
+        elif "PERMISSION_DENIED" in error_msg or "permission" in error_msg.lower():
+            return f"❌ エラー: APIキーの権限が不足しています。新しいAPIキーを作成してください。\n\n{full_error}"
+        elif "blocked" in error_msg.lower() or "SAFETY" in error_msg:
+            return f"❌ エラー: 安全性フィルターによりブロックされました。\n\n{full_error}"
         else:
-            return f"❌ エラー: {error_msg}"
+            return f"❌ エラーが発生しました\n\n{full_error}\n\n💡 問題が解決しない場合は、APIキーを再確認するか、別のモデル（gemini-1.5-pro）をお試しください。"
 
 
 # ==================== メインアプリケーション ====================
