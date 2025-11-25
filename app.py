@@ -1114,7 +1114,7 @@ def main():
             with col2:
                 max_words = st.slider("最大単語数", 30, 200, 100)
             with col3:
-                use_tfidf_wordcloud = st.checkbox("専門用語抽出\n(TF-IDF)", value=False, help="一般的な単語を除外し、専門用語に特化した抽出を行います")
+                use_tfidf_wordcloud = st.checkbox("専門用語抽出\n(TF-IDF)", value=False, help="一般的な単語を除外し、専門用語に特化した抽出を行います", key="tfidf_wordcloud")
 
             if st.button("☁️ ワードクラウドを生成"):
                 with st.spinner("生成中..."):
@@ -1183,7 +1183,7 @@ def main():
             with col3:
                 min_cooccurrence = st.slider("最小共起回数", 1, 10, 2)
             with col4:
-                use_tfidf_network = st.checkbox("専門用語抽出\n(TF-IDF)", value=False, help="一般的な単語を除外し、専門用語に特化した抽出を行います")
+                use_tfidf_network = st.checkbox("専門用語抽出\n(TF-IDF)", value=False, help="一般的な単語を除外し、専門用語に特化した抽出を行います", key="tfidf_network")
 
             if st.button("🕸️ 共起ネットワークを生成"):
                 with st.spinner("解析中..."):
