@@ -228,7 +228,8 @@ class SemanticScholarCrawler:
                         'venue': paper_data.get('venue') or 'N/A', 'url': url,
                         'citations': paper_data.get('citationCount', 0),
                         'crawled_at': datetime.now().isoformat(),
-                        'keyword': keyword, 'source': 'Semantic Scholar'
+                        'keyword': keyword, 'source': 'Semantic Scholar',
+                        'externalIds': external_ids
                     }
 
                     papers.append(paper_info)
@@ -673,16 +674,13 @@ def main():
 
         query = ""
         if search_mode_option == "シンプル検索":
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                query = st.text_input("検索キーワード", placeholder="例: mass spectrometry")
-            with col2:
-                max_results = st.number_input(
-                    f"取得件数（{recommended}）",
-                    min_value=1,
-                    max_value=max_limit,
-                    value=default_value
-                )
+            query = st.text_input("検索キーワード", placeholder="例: mass spectrometry")
+            max_results = st.slider(
+                f"取得件数（{recommended}）",
+                min_value=1,
+                max_value=max_limit,
+                value=default_value
+            )
         else:
             # 複数キーワード検索
             col1, col2 = st.columns([2, 1])
@@ -697,12 +695,14 @@ def main():
                     "検索条件",
                     ["AND検索（すべて含む）", "OR検索（いずれか含む）"]
                 )
-                max_results = st.number_input(
-                    f"取得件数（{recommended}）",
-                    min_value=1,
-                    max_value=max_limit,
-                    value=default_value
-                )
+
+            max_results = st.slider(
+                f"取得件数（{recommended}）",
+                min_value=1,
+                max_value=max_limit,
+                value=default_value,
+                key="multi_keyword_slider"
+            )
 
             # キーワードをリストに変換してクエリを構築
             if keywords_input:
