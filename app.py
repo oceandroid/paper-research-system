@@ -341,10 +341,82 @@ def extract_keywords(text: str, min_length: int = 4, top_n: int = 50) -> List[st
     return [word for word, _ in word_counts.most_common(top_n)]
 
 
-def build_cooccurrence_network(papers: List[Dict], top_keywords: int = 30, window_size: int = 10):
+def extract_keywords_tfidf(papers: List[Dict], top_n: int = 50, min_length: int = 5) -> List[str]:
+    """TF-IDFを使って専門用語（Technical Terms）を抽出"""
+    try:
+        from sklearn.feature_extraction.text import TfidfVectorizer
+
+        # 各論文のタイトルとアブストラクトを文書として扱う
+        documents = []
+        for paper in papers:
+            text = f"{paper['title']} {paper['abstract']}"
+            if paper['abstract'] != 'N/A':
+                documents.append(text)
+
+        if len(documents) < 2:
+            # 文書数が少ない場合は従来の方法にフォールバック
+            all_text = " ".join(documents)
+            return extract_keywords(all_text, min_length=min_length, top_n=top_n)
+
+        # 拡張ストップワード（一般的な学術用語を追加）
+        stop_words = {
+            'this', 'that', 'with', 'from', 'were', 'been', 'have', 'has', 'had',
+            'will', 'would', 'could', 'should', 'may', 'might', 'must', 'can',
+            'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all',
+            'was', 'said', 'them', 'than', 'find', 'also', 'made',
+            'when', 'what', 'which', 'their', 'these', 'those', 'such', 'into',
+            'through', 'during', 'before', 'after', 'about', 'between', 'under',
+            'using', 'used', 'study', 'studies', 'method', 'methods', 'results',
+            'analysis', 'data', 'approach', 'based', 'however', 'therefore',
+            'thus', 'although', 'moreover', 'furthermore', 'respectively',
+            'investigated', 'observed', 'performed', 'obtained', 'showed',
+            'demonstrated', 'reported', 'suggested', 'proposed', 'presented',
+            'compared', 'evaluated', 'examined', 'measured', 'analyzed',
+            'identified', 'determined', 'associated', 'related', 'involved'
+        }
+
+        # TF-IDF Vectorizer（最小文字数でフィルタリング）
+        vectorizer = TfidfVectorizer(
+            max_features=top_n * 3,  # 多めに取得してから絞る
+            stop_words=list(stop_words),
+            token_pattern=r'\b[a-zA-Z]{' + str(min_length) + r',}\b',
+            lowercase=True,
+            ngram_range=(1, 1)  # 1単語のみ（2単語の専門用語が必要ならngram_range=(1, 2)）
+        )
+
+        tfidf_matrix = vectorizer.fit_transform(documents)
+        feature_names = vectorizer.get_feature_names_out()
+
+        # 各単語のTF-IDFスコアの平均を計算
+        tfidf_scores = tfidf_matrix.mean(axis=0).A1
+
+        # スコアと単語のペアを作成してソート
+        word_scores = list(zip(feature_names, tfidf_scores))
+        word_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # 上位top_n個を返す
+        top_keywords = [word for word, score in word_scores[:top_n]]
+
+        return top_keywords
+
+    except ImportError:
+        st.warning("⚠️ scikit-learnがインストールされていないため、通常のキーワード抽出を使用します")
+        all_text = " ".join([f"{p['title']} {p['abstract']}" for p in papers if p['abstract'] != 'N/A'])
+        return extract_keywords(all_text, min_length=min_length, top_n=top_n)
+    except Exception as e:
+        st.error(f"TF-IDF抽出エラー: {e}")
+        all_text = " ".join([f"{p['title']} {p['abstract']}" for p in papers if p['abstract'] != 'N/A'])
+        return extract_keywords(all_text, min_length=min_length, top_n=top_n)
+
+
+def build_cooccurrence_network(papers: List[Dict], top_keywords: int = 30, window_size: int = 10, use_tfidf: bool = False):
     """共起ネットワークを構築"""
-    all_text = " ".join([f"{p['title']} {p['abstract']}" for p in papers if p['abstract'] != 'N/A'])
-    keywords = extract_keywords(all_text, min_length=5, top_n=top_keywords)
+    if use_tfidf:
+        keywords = extract_keywords_tfidf(papers, top_n=top_keywords, min_length=5)
+    else:
+        all_text = " ".join([f"{p['title']} {p['abstract']}" for p in papers if p['abstract'] != 'N/A'])
+        keywords = extract_keywords(all_text, min_length=5, top_n=top_keywords)
+
     cooccurrence = Counter()
 
     for paper in papers:
@@ -1036,24 +1108,44 @@ def main():
         st.markdown("---")
 
         if st.session_state.papers:
-            col1, col2 = st.columns([3, 1])
+            col1, col2, col3 = st.columns([2, 1, 1])
             with col1:
                 st.info(f"現在 {len(st.session_state.papers)} 件の論文データがあります")
             with col2:
                 max_words = st.slider("最大単語数", 30, 200, 100)
+            with col3:
+                use_tfidf_wordcloud = st.checkbox("専門用語抽出\n(TF-IDF)", value=False, help="一般的な単語を除外し、専門用語に特化した抽出を行います")
 
             if st.button("☁️ ワードクラウドを生成"):
                 with st.spinner("生成中..."):
-                    text = " ".join([f"{p['title']} {p['abstract']}" for p in st.session_state.papers if p['abstract'] != 'N/A'])
-                    if text:
-                        wordcloud = WordCloud(width=1200, height=600, background_color='white', colormap='viridis', max_words=max_words).generate(text)
-                        fig, ax = plt.subplots(figsize=(15, 7))
-                        ax.imshow(wordcloud, interpolation='bilinear')
-                        ax.axis('off')
-                        st.pyplot(fig)
-                        st.success("✅ ワードクラウド生成完了")
+                    if use_tfidf_wordcloud:
+                        # TF-IDF方式でキーワードを抽出
+                        keywords = extract_keywords_tfidf(st.session_state.papers, top_n=max_words, min_length=5)
+                        if keywords:
+                            # キーワードを文字列として結合してWordCloudに渡す
+                            text = " ".join(keywords * 10)  # 重みを保つため繰り返す
+                            wordcloud = WordCloud(width=1200, height=600, background_color='white', colormap='viridis', max_words=max_words).generate(text)
+                            fig, ax = plt.subplots(figsize=(15, 7))
+                            ax.imshow(wordcloud, interpolation='bilinear')
+                            ax.axis('off')
+                            ax.set_title("Word Cloud (TF-IDF Technical Terms)", fontsize=16, fontweight='bold')
+                            st.pyplot(fig)
+                            st.success("✅ ワードクラウド生成完了（TF-IDF専門用語モード）")
+                        else:
+                            st.warning("テキストデータが不足しています")
                     else:
-                        st.warning("テキストデータが不足しています")
+                        # 従来の方式（頻出単語）
+                        text = " ".join([f"{p['title']} {p['abstract']}" for p in st.session_state.papers if p['abstract'] != 'N/A'])
+                        if text:
+                            wordcloud = WordCloud(width=1200, height=600, background_color='white', colormap='viridis', max_words=max_words).generate(text)
+                            fig, ax = plt.subplots(figsize=(15, 7))
+                            ax.imshow(wordcloud, interpolation='bilinear')
+                            ax.axis('off')
+                            ax.set_title("Word Cloud (Frequency-based)", fontsize=16, fontweight='bold')
+                            st.pyplot(fig)
+                            st.success("✅ ワードクラウド生成完了")
+                        else:
+                            st.warning("テキストデータが不足しています")
         else:
             st.info("まず「論文検索」タブで論文を取得してください")
 
@@ -1083,17 +1175,19 @@ def main():
         st.markdown("---")
 
         if st.session_state.papers:
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
                 top_keywords = st.slider("表示キーワード数", 10, 50, 30)
             with col2:
                 window_size = st.slider("共起ウィンドウ", 5, 20, 10)
             with col3:
                 min_cooccurrence = st.slider("最小共起回数", 1, 10, 2)
+            with col4:
+                use_tfidf_network = st.checkbox("専門用語抽出\n(TF-IDF)", value=False, help="一般的な単語を除外し、専門用語に特化した抽出を行います")
 
             if st.button("🕸️ 共起ネットワークを生成"):
                 with st.spinner("解析中..."):
-                    keywords, cooccurrence = build_cooccurrence_network(st.session_state.papers, top_keywords, window_size)
+                    keywords, cooccurrence = build_cooccurrence_network(st.session_state.papers, top_keywords, window_size, use_tfidf=use_tfidf_network)
                     G = nx.Graph()
                     for (word1, word2), count in cooccurrence.items():
                         if count >= min_cooccurrence:
@@ -1110,7 +1204,8 @@ def main():
                         nx.draw_networkx_edges(G, pos, width=[w / max_weight * 5 for w in weights], alpha=0.3, ax=ax)
                         nx.draw_networkx_labels(G, pos, font_size=10, font_weight='bold', ax=ax)
                         ax.axis('off')
-                        ax.set_title(f"Co-occurrence Network (Nodes: {len(G.nodes())}, Edges: {len(G.edges())})", fontsize=16)
+                        method_label = "TF-IDF Technical Terms" if use_tfidf_network else "Frequency-based"
+                        ax.set_title(f"Co-occurrence Network ({method_label}) - Nodes: {len(G.nodes())}, Edges: {len(G.edges())}", fontsize=16)
                         st.pyplot(fig)
 
                         st.subheader("Network Statistics")
@@ -1123,7 +1218,11 @@ def main():
                             if len(G.nodes()) > 0:
                                 avg_degree = sum(dict(G.degree()).values()) / len(G.nodes())
                                 st.metric("Avg Degree", f"{avg_degree:.2f}")
-                        st.success("✅ 共起ネットワーク生成完了")
+
+                        if use_tfidf_network:
+                            st.success("✅ 共起ネットワーク生成完了（TF-IDF専門用語モード）")
+                        else:
+                            st.success("✅ 共起ネットワーク生成完了")
                     else:
                         st.warning("共起関係が見つかりませんでした")
         else:
