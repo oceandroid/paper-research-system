@@ -45,6 +45,8 @@ if 'gemini_api_key' not in st.session_state:
     st.session_state.gemini_api_key = os.getenv('GEMINI_API_KEY', '')
 if 'gemini_usage_count' not in st.session_state:
     st.session_state.gemini_usage_count = 0
+if 'search_history' not in st.session_state:
+    st.session_state.search_history = []
 
 
 # ==================== PubMed Crawler ====================
@@ -358,6 +360,66 @@ def build_cooccurrence_network(papers: List[Dict], top_keywords: int = 30, windo
     return keywords, cooccurrence
 
 
+def detect_pdf_link(paper: Dict) -> Optional[str]:
+    """論文のPDFリンクを自動検出"""
+    # DOIがある場合
+    if 'externalIds' in paper and paper['externalIds'].get('DOI'):
+        doi = paper['externalIds']['DOI']
+        return f"https://doi.org/{doi}"
+
+    # PubMed IDがある場合
+    if paper.get('pmid') and paper['pmid'] != 'N/A':
+        pmid = paper['pmid']
+        # PubMed Centralで無料PDFがあるかチェック用URL
+        return f"https://www.ncbi.nlm.nih.gov/pmc/articles/pmid/{pmid}/"
+
+    # 既存のURLを返す
+    if paper.get('url') and paper['url'] != 'N/A':
+        return paper['url']
+
+    return None
+
+
+def build_search_query(keywords: List[str], search_mode: str) -> str:
+    """複数キーワードからAND/OR検索クエリを構築"""
+    keywords = [k.strip() for k in keywords if k.strip()]
+
+    if not keywords:
+        return ""
+
+    if len(keywords) == 1:
+        return keywords[0]
+
+    if search_mode == "AND検索（すべて含む）":
+        # PubMed/Semantic Scholar用のANDクエリ
+        return " AND ".join(keywords)
+    else:  # OR検索
+        return " OR ".join(keywords)
+
+
+def add_to_search_history(keyword: str, data_source: str, count: int):
+    """検索履歴に追加"""
+    history_entry = {
+        'keyword': keyword,
+        'data_source': data_source,
+        'count': count,
+        'timestamp': datetime.now().isoformat()
+    }
+
+    # 同じクエリがあれば削除（最新を優先）
+    st.session_state.search_history = [
+        h for h in st.session_state.search_history
+        if not (h['keyword'] == keyword and h['data_source'] == data_source)
+    ]
+
+    # 先頭に追加
+    st.session_state.search_history.insert(0, history_entry)
+
+    # 最大10件まで保持
+    if len(st.session_state.search_history) > 10:
+        st.session_state.search_history = st.session_state.search_history[:10]
+
+
 # ==================== Gemini AI要約 ====================
 def summarize_papers_with_gemini(papers: List[Dict], api_key: str, search_keyword: str) -> str:
     """Gemini APIを使って論文全体のトレンドと考察を生成"""
@@ -534,6 +596,24 @@ def main():
 
         st.markdown("---")
 
+        # 検索履歴
+        if st.session_state.search_history:
+            st.markdown("### 📜 検索履歴")
+            for i, hist in enumerate(st.session_state.search_history[:5]):
+                hist_label = f"{hist['keyword'][:30]}..."
+                hist_info = f"{hist['data_source'].split('（')[0]} ({hist['count']}件)"
+
+                if st.button(f"🔍 {hist_label}", key=f"hist_{i}", help=hist_info):
+                    # 履歴から検索条件を復元（session_stateに保存して再検索させる）
+                    st.session_state.restore_search = hist
+                    st.rerun()
+
+            if st.button("🗑️ 履歴をクリア"):
+                st.session_state.search_history = []
+                st.rerun()
+
+        st.markdown("---")
+
         st.markdown("### 📊 データソース比較")
         st.markdown("""
         **PubMed** 📚
@@ -584,16 +664,52 @@ def main():
             default_value = 10
             recommended = "推奨: 10-30件（大量取得でブロックのリスク）"
 
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            query = st.text_input("検索キーワード", placeholder="例: mass spectrometry proteomics")
-        with col2:
-            max_results = st.number_input(
-                f"取得件数（{recommended}）",
-                min_value=1,
-                max_value=max_limit,
-                value=default_value
-            )
+        # 複数キーワード検索モード
+        search_mode_option = st.radio(
+            "検索モード",
+            ["シンプル検索", "複数キーワード検索（AND/OR）"],
+            horizontal=True
+        )
+
+        query = ""
+        if search_mode_option == "シンプル検索":
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                query = st.text_input("検索キーワード", placeholder="例: mass spectrometry proteomics")
+            with col2:
+                max_results = st.number_input(
+                    f"取得件数（{recommended}）",
+                    min_value=1,
+                    max_value=max_limit,
+                    value=default_value
+                )
+        else:
+            # 複数キーワード検索
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                keywords_input = st.text_area(
+                    "キーワード（改行区切り）",
+                    placeholder="proteomics\nmass spectrometry\nbiomarker",
+                    height=100
+                )
+            with col2:
+                search_logic = st.radio(
+                    "検索条件",
+                    ["AND検索（すべて含む）", "OR検索（いずれか含む）"]
+                )
+                max_results = st.number_input(
+                    f"取得件数（{recommended}）",
+                    min_value=1,
+                    max_value=max_limit,
+                    value=default_value
+                )
+
+            # キーワードをリストに変換してクエリを構築
+            if keywords_input:
+                keywords_list = [k.strip() for k in keywords_input.split('\n') if k.strip()]
+                query = build_search_query(keywords_list, search_logic)
+                if len(keywords_list) > 1:
+                    st.info(f"🔍 検索クエリ: `{query}`")
 
         year_filter = st.checkbox("年で絞り込み")
         year_from = None
@@ -620,6 +736,10 @@ def main():
                         if papers:
                             st.session_state.papers = papers
                             st.session_state.search_keyword = query  # 検索キーワードを保存
+
+                            # 検索履歴に追加
+                            add_to_search_history(query, data_source, len(papers))
+
                             st.success(f"✅ {len(papers)}件の論文を取得しました")
                             st.info("💡 データは「💾 保存データ」タブでいつでも確認・ダウンロードできます")
                         else:
@@ -711,7 +831,15 @@ def main():
                         st.markdown(f"**著者**: {authors_str}")
                         st.markdown(f"**年**: {paper['year']}")
                         st.markdown(f"**掲載**: {paper.get('venue', 'N/A')}")
-                        st.markdown(f"**URL**: [{paper['url']}]({paper['url']})")
+
+                        # PDFリンク自動検出
+                        pdf_link = detect_pdf_link(paper)
+                        if pdf_link:
+                            st.markdown(f"**URL**: [{paper['url']}]({paper['url']})")
+                            if pdf_link != paper['url']:
+                                st.markdown(f"**📥 PDF**: [ダウンロード/表示]({pdf_link})")
+                        else:
+                            st.markdown(f"**URL**: [{paper['url']}]({paper['url']})")
                     with col2:
                         if paper.get('citations', 0) > 0:
                             st.metric("引用数", paper['citations'])
