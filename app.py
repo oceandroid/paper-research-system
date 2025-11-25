@@ -647,7 +647,7 @@ def main():
 
         data_source = st.radio(
             "データソース",
-            ["PubMed（医学・生命科学）", "Semantic Scholar（全分野・引用数あり）", "Google Scholar（ブロック注意）"]
+            ["PubMed（医学・生命科学）", "Semantic Scholar（全分野でオススメ）", "Google Scholar（一応できるが非推奨）"]
         )
 
         # データソース別の推奨値と上限を設定
@@ -675,7 +675,7 @@ def main():
         if search_mode_option == "シンプル検索":
             col1, col2 = st.columns([3, 1])
             with col1:
-                query = st.text_input("検索キーワード", placeholder="例: mass spectrometry proteomics")
+                query = st.text_input("検索キーワード", placeholder="例: mass spectrometry")
             with col2:
                 max_results = st.number_input(
                     f"取得件数（{recommended}）",
