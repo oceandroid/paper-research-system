@@ -467,13 +467,15 @@ def summarize_papers_with_gemini(papers: List[Dict], api_key: str, search_keywor
         except Exception as e:
             return f"❌ エラー: モデルの取得に失敗しました。\n\nエラー: {str(e)}\n\nAPIキーを確認してください。"
 
-        # プロンプト作成
+        # プロンプト作成（全論文を分析）
         papers_text = ""
-        for i, paper in enumerate(papers[:20], 1):  # 最大20件まで
+        for i, paper in enumerate(papers, 1):
             abstract = paper.get('abstract', 'N/A')
             if abstract == 'N/A':
                 abstract = "Abstract not available"
-            papers_text += f"\n[Paper {i}]\nTitle: {paper['title']}\nYear: {paper['year']}\nAbstract: {abstract[:500]}...\n"
+            # Abstractが長すぎる場合は500文字に制限
+            abstract_trimmed = abstract[:500] + "..." if len(abstract) > 500 else abstract
+            papers_text += f"\n[Paper {i}]\nTitle: {paper['title']}\nYear: {paper['year']}\nAbstract: {abstract_trimmed}\n"
 
         prompt = f"""
 あなたは研究トレンド分析の専門家です。以下の論文データを分析し、「{search_keyword}」に関する研究トレンドと考察を日本語で提供してください。
@@ -993,7 +995,7 @@ def main():
             if not st.session_state.gemini_api_key:
                 st.warning("⚠️ Gemini APIキーが設定されていません。サイドバーで設定してください。")
             else:
-                st.info(f"📊 現在 {len(st.session_state.papers)} 件の論文データがあります（最大20件まで分析）")
+                st.info(f"📊 現在 {len(st.session_state.papers)} 件の論文データがあります")
 
                 # 検索キーワードの取得（session_stateに保存する）
                 if 'search_keyword' not in st.session_state:
